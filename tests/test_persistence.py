@@ -13,6 +13,13 @@ def test_store_chart_and_evaluation(tmp_path: Path):
             "difficulty": "oni",
             "bpm": 180,
             "genre": "electronic",
+            "quality_score": 0.91,
+            "candidate_count": 4,
+            "candidate_seed": 2002,
+            "candidate_scores": [
+                {"seed": 0, "greedy": True, "score": 1.1},
+                {"seed": 2002, "greedy": False, "score": 0.91},
+            ],
             "rating": 0,
             "plays": 0,
             "created_at": "2026-03-21T00:00:00",
@@ -37,6 +44,10 @@ def test_store_chart_and_evaluation(tmp_path: Path):
 
     charts = store.list_charts()
     assert charts[0]["rating"] == 4.0
+    assert charts[0]["quality_score"] == 0.91
+    assert charts[0]["candidate_count"] == 4
+    assert charts[0]["candidate_seed"] == 2002
+    assert charts[0]["candidate_scores"][1]["score"] == 0.91
     evaluations = store.list_evaluations()
     assert evaluations[0]["comments"] == "good flow"
 

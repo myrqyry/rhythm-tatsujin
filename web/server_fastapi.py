@@ -382,7 +382,7 @@ def _run_generation_job(
     loop: asyncio.AbstractEventLoop,
 ):
     from taikonation.generation.osu_export import save_timestamped_osu
-    from taikonation.generation.softchart_backend import generate_from_audio
+    from taikonation.generation.softchart_backend import generate_best_of_audio
 
     audio_path = UPLOAD_FOLDER / Path(audio_filename).name
 
@@ -408,11 +408,12 @@ def _run_generation_job(
             raise FileNotFoundError(f"Uploaded audio not found: {audio_filename}")
 
         progress(1, 'Loading pretrained Taiko model')
-        result = generate_from_audio(
+        result = generate_best_of_audio(
             audio_path,
             course=difficulty,
             bpm=bpm,
-            greedy=True,
+            candidate_count=4,
+            reference_root=REPO_ROOT / "output" / "reference_corpus",
             on_progress=progress,
         )
         active_models["softchart-v17"].update({
@@ -447,6 +448,10 @@ def _run_generation_job(
             'audio_filename': audio_path.name,
             'model_id': result.model_id,
             'timing_mode': result.timing_mode,
+            'quality_score': result.quality_score,
+            'candidate_count': result.candidate_count,
+            'candidate_seed': result.candidate_seed,
+            'candidate_scores': list(result.candidate_scores),
             'rating': 0,
             'plays': 0,
             'created_at': datetime.now(timezone.utc).isoformat(),

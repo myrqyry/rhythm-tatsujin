@@ -12,7 +12,7 @@ The old TensorFlow/tflearn checkpoints under model/ are retained as historical a
 ## What works now
 
 - Raw WAV/MP3/FLAC/OGG/M4A/AAC upload in the web UI; runtime uploads stay under ignored `output/uploads/` and never mix into the training corpus.
-- Pretrained audio-to-Taiko generation using the pinned SoftChart v1.7 release used by the validated upstream Space.
+- Pretrained audio-to-Taiko generation using the pinned SoftChart v1.7 release used by the validated upstream Space, with optional local human-reference best-of-4 reranking that always keeps the deterministic baseline in the candidate pool.
 - Automatic CUDA use when available; CPU fallback is supported.
 - GPU-aware mixed precision: Ampere+ can use BF16, older CUDA GPUs use FP16.
 - Easy, Normal, Hard, Oni, and Ura conditioning.

@@ -52,6 +52,10 @@ class StudioStore:
                         audio_filename TEXT,
                         model_id TEXT,
                         timing_mode TEXT,
+                        quality_score REAL,
+                        candidate_count INTEGER NOT NULL DEFAULT 1,
+                        candidate_seed INTEGER,
+                        candidate_scores_json TEXT NOT NULL DEFAULT '[]',
                         rating REAL NOT NULL DEFAULT 0,
                         plays INTEGER NOT NULL DEFAULT 0,
                         created_at TEXT NOT NULL
@@ -93,6 +97,10 @@ class StudioStore:
                     "audio_filename": "TEXT",
                     "model_id": "TEXT",
                     "timing_mode": "TEXT",
+                    "quality_score": "REAL",
+                    "candidate_count": "INTEGER NOT NULL DEFAULT 1",
+                    "candidate_seed": "INTEGER",
+                    "candidate_scores_json": "TEXT NOT NULL DEFAULT '[]'",
                 }.items():
                     if name not in existing:
                         conn.execute(f"ALTER TABLE charts ADD COLUMN {name} {sql_type}")
@@ -113,6 +121,18 @@ class StudioStore:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    @staticmethod
+    def _chart_from_row(row: sqlite3.Row | None) -> Optional[Dict[str, Any]]:
+        if row is None:
+            return None
+        chart = dict(row)
+        raw_scores = chart.pop("candidate_scores_json", "[]") or "[]"
+        try:
+            chart["candidate_scores"] = json.loads(raw_scores)
+        except json.JSONDecodeError:
+            chart["candidate_scores"] = []
+        return chart
+
     def create_chart(self, chart: Dict[str, Any]) -> Dict[str, Any]:
         with _LOCK:
             with self._connect() as conn:
@@ -120,9 +140,11 @@ class StudioStore:
                     """
                     INSERT INTO charts(
                         title, artist, difficulty, bpm, genre, filename,
-                        audio_filename, model_id, timing_mode, rating, plays, created_at
+                        audio_filename, model_id, timing_mode, quality_score,
+                        candidate_count, candidate_seed, candidate_scores_json,
+                        rating, plays, created_at
                     )
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         chart["title"],
@@ -134,6 +156,18 @@ class StudioStore:
                         chart.get("audio_filename"),
                         chart.get("model_id"),
                         chart.get("timing_mode"),
+                        (
+                            float(chart["quality_score"])
+                            if chart.get("quality_score") is not None
+                            else None
+                        ),
+                        int(chart.get("candidate_count", 1)),
+                        (
+                            int(chart["candidate_seed"])
+                            if chart.get("candidate_seed") is not None
+                            else None
+                        ),
+                        json.dumps(chart.get("candidate_scores", [])),
                         float(chart.get("rating", 0)),
                         int(chart.get("plays", 0)),
                         chart["created_at"],
@@ -149,24 +183,28 @@ class StudioStore:
             row = conn.execute(
                 """
                 SELECT id, title, artist, difficulty, bpm, genre, filename,
-                       audio_filename, model_id, timing_mode, rating, plays, created_at
+                       audio_filename, model_id, timing_mode, quality_score,
+                       candidate_count, candidate_seed, candidate_scores_json,
+                       rating, plays, created_at
                 FROM charts WHERE id = ?
                 """,
                 (chart_id,),
             ).fetchone()
-        return dict(row) if row else None
+        return self._chart_from_row(row)
 
     def list_charts(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute(
                 """
                 SELECT id, title, artist, difficulty, bpm, genre, filename,
-                       audio_filename, model_id, timing_mode, rating, plays, created_at
+                       audio_filename, model_id, timing_mode, quality_score,
+                       candidate_count, candidate_seed, candidate_scores_json,
+                       rating, plays, created_at
                 FROM charts ORDER BY id DESC LIMIT ? OFFSET ?
                 """,
                 (limit, offset),
             ).fetchall()
-        return [dict(r) for r in rows]
+        return [self._chart_from_row(row) for row in rows]
 
     def count_charts(self) -> int:
         with self._connect() as conn:
@@ -178,14 +216,16 @@ class StudioStore:
             row = conn.execute(
                 """
                 SELECT id, title, artist, difficulty, bpm, genre, filename,
-                       audio_filename, model_id, timing_mode, rating, plays, created_at
+                       audio_filename, model_id, timing_mode, quality_score,
+                       candidate_count, candidate_seed, candidate_scores_json,
+                       rating, plays, created_at
                 FROM charts
                 WHERE rating <= 0
                 ORDER BY id ASC
                 LIMIT 1
                 """
             ).fetchone()
-        return dict(row) if row else None
+        return self._chart_from_row(row)
 
     def set_chart_rating(self, chart_id: int, rating: float) -> bool:
         with _LOCK:

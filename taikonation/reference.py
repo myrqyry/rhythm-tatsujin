@@ -156,6 +156,63 @@ def _nearest_snap(beats: float) -> float | str:
     return nearest if abs(nearest - beats) <= 0.03 else "other"
 
 
+def _normalized_entropy(values: Iterable[object], alphabet_size: int | None = None) -> float:
+    items = list(values)
+    if not items:
+        return 0.0
+    counts: dict[object, int] = {}
+    for item in items:
+        counts[item] = counts.get(item, 0) + 1
+    entropy = -sum(
+        (count / len(items)) * math.log2(count / len(items))
+        for count in counts.values()
+    )
+    denominator = math.log2(alphabet_size or len(counts)) if (alphabet_size or len(counts)) > 1 else 0.0
+    return entropy / denominator if denominator else 0.0
+
+
+def _repeated_window_share(tokens: list[object], width: int) -> float:
+    if len(tokens) < width:
+        return 0.0
+    windows = [tuple(tokens[index:index + width]) for index in range(len(tokens) - width + 1)]
+    counts: dict[tuple, int] = {}
+    for window in windows:
+        counts[window] = counts.get(window, 0) + 1
+    repeated = sum(1 for window in windows if counts[window] > 1)
+    return repeated / len(windows) if windows else 0.0
+
+
+def _section_density_metrics(note_times: list[int], sections: int = 8) -> dict[str, float]:
+    if len(note_times) < 2 or note_times[-1] <= note_times[0]:
+        return {
+            "section_density_cv": 0.0,
+            "section_density_change": 0.0,
+            "peak_section_ratio": 0.0,
+        }
+
+    start = note_times[0]
+    span = note_times[-1] - start
+    counts = [0] * sections
+    for time_ms in note_times:
+        index = min(sections - 1, int(((time_ms - start) / span) * sections))
+        counts[index] += 1
+
+    mean_count = statistics.mean(counts)
+    density_cv = statistics.pstdev(counts) / mean_count if mean_count else 0.0
+    adjacent_change = (
+        statistics.mean(abs(current - previous) for previous, current in zip(counts, counts[1:]))
+        / mean_count
+        if mean_count and len(counts) > 1
+        else 0.0
+    )
+    peak_ratio = max(counts) / mean_count if mean_count else 0.0
+    return {
+        "section_density_cv": density_cv,
+        "section_density_change": adjacent_change,
+        "peak_section_ratio": peak_ratio,
+    }
+
+
 def analyze_taiko_map(parsed: dict) -> dict:
     metadata = parsed["metadata"]
     general = parsed["general"]
@@ -171,32 +228,113 @@ def analyze_taiko_map(parsed: dict) -> dict:
         ),
         key=lambda point: point["time"],
     )
-    notes = [obj for obj in parsed["hit_objects"] if obj["type"] & 1]
+    notes = sorted(
+        (obj for obj in parsed["hit_objects"] if obj["type"] & 1),
+        key=lambda obj: obj["time"],
+    )
     note_times = [obj["time"] for obj in notes]
     duration_s = (
         (max(note_times) - min(note_times)) / 1000.0 if len(note_times) >= 2 else 0.0
     )
 
-    interval_ms = []
-    interval_beats = []
+    interval_ms: list[int] = []
+    interval_beats: list[float] = []
+    aligned_beats: list[float | None] = []
+    snap_tokens: list[str] = []
     snap_counts: dict[str, int] = {}
     for previous, current in zip(notes, notes[1:]):
         delta = current["time"] - previous["time"]
         if delta < 0:
+            aligned_beats.append(None)
             continue
         interval_ms.append(delta)
         beat_length = _active_beat_length(red_points, previous["time"])
-        if beat_length:
-            beats = delta / beat_length
-            interval_beats.append(beats)
-            snap = _nearest_snap(beats)
-            key = str(snap)
-            snap_counts[key] = snap_counts.get(key, 0) + 1
+        if not beat_length:
+            aligned_beats.append(None)
+            continue
+        beats = delta / beat_length
+        aligned_beats.append(beats)
+        interval_beats.append(beats)
+        snap = _nearest_snap(beats)
+        key = str(snap)
+        snap_tokens.append(key)
+        snap_counts[key] = snap_counts.get(key, 0) + 1
+
+    colors = ["K" if note["hitsound"] & 8 else "D" for note in notes]
+    color_transitions = list(zip(colors, colors[1:]))
+    color_change_ratio = (
+        sum(previous != current for previous, current in color_transitions)
+        / len(color_transitions)
+        if color_transitions
+        else 0.0
+    )
+    color_bigrams = [previous + current for previous, current in color_transitions]
+
+    color_runs: list[int] = []
+    if colors:
+        run_length = 1
+        for previous, current in color_transitions:
+            if previous == current:
+                run_length += 1
+            else:
+                color_runs.append(run_length)
+                run_length = 1
+        color_runs.append(run_length)
+
+    event_tokens = []
+    for index, color in enumerate(colors[:-1]):
+        beat = aligned_beats[index] if index < len(aligned_beats) else None
+        snap = str(_nearest_snap(beat)) if beat is not None else "unknown"
+        event_tokens.append(f"{color}:{snap}")
+
+    valid_snap_transitions = list(zip(snap_tokens, snap_tokens[1:]))
+    subdivision_change_ratio = (
+        sum(previous != current for previous, current in valid_snap_transitions)
+        / len(valid_snap_transitions)
+        if valid_snap_transitions
+        else 0.0
+    )
+
+    burst_lengths: list[int] = []
+    if notes:
+        current_burst = 1
+        for beats in aligned_beats:
+            if beats is not None and beats <= 0.5 + 1e-6:
+                current_burst += 1
+            else:
+                burst_lengths.append(current_burst)
+                current_burst = 1
+        burst_lengths.append(current_burst)
+    burst_notes = sum(burst_lengths) or 1
 
     ka_count = sum(1 for note in notes if note["hitsound"] & 8)
     big_count = sum(1 for note in notes if note["hitsound"] & 4)
     fast_count = sum(1 for beats in interval_beats if beats <= 0.25 + 1e-6)
     half_or_faster = sum(1 for beats in interval_beats if beats <= 0.5 + 1e-6)
+    rest_count = sum(1 for beats in interval_beats if beats > 1.0 + 1e-6)
+
+    structural = {
+        "color_change_ratio": color_change_ratio,
+        "color_bigram_entropy": _normalized_entropy(color_bigrams, alphabet_size=4),
+        "mean_color_run_length": statistics.mean(color_runs) if color_runs else 0.0,
+        "repeated_motif_4_share": _repeated_window_share(event_tokens, 4),
+        "repeated_motif_8_share": _repeated_window_share(event_tokens, 8),
+        "subdivision_entropy": _normalized_entropy(
+            snap_tokens,
+            alphabet_size=len(SNAP_CANDIDATES) + 1,
+        ),
+        "subdivision_change_ratio": subdivision_change_ratio,
+        "mean_burst_length": statistics.mean(burst_lengths) if burst_lengths else 0.0,
+        "burst_4plus_note_share": (
+            sum(length for length in burst_lengths if length >= 4) / burst_notes
+            if burst_lengths
+            else 0.0
+        ),
+        "rest_interval_share": (
+            rest_count / len(interval_beats) if interval_beats else 0.0
+        ),
+        **_section_density_metrics(note_times),
+    }
 
     return {
         "beatmap_id": metadata.get("BeatmapID"),
@@ -223,6 +361,7 @@ def analyze_taiko_map(parsed: dict) -> dict:
             half_or_faster / len(interval_beats) if interval_beats else 0.0
         ),
         "snap_counts": snap_counts,
+        **structural,
     }
 
 

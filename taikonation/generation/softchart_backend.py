@@ -7,7 +7,7 @@ contract: raw audio in, timestamped Taiko events plus BPM out.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
 from typing import Callable
@@ -32,6 +32,11 @@ class GeneratedChart:
     timing_mode: str
     model_id: str
     device: str
+    quality_score: float | None = None
+    candidate_count: int = 1
+    candidate_seed: int | None = None
+    quality_neighbors: tuple[dict, ...] = ()
+    candidate_scores: tuple[dict, ...] = ()
 
 
 def preferred_device() -> str:
@@ -132,6 +137,9 @@ def generate_from_audio(
     model_id: str = DEFAULT_MODEL_ID,
     device: str | None = None,
     greedy: bool = True,
+    seed: int = 0,
+    temperature: float = 1.0,
+    top_p: float = 0.95,
     on_progress: Callable[[int, str], None] | None = None,
 ) -> GeneratedChart:
     course = course.lower()
@@ -176,7 +184,9 @@ def generate_from_audio(
             course,
             level=chart_level,
             greedy=greedy,
-            seed=0,
+            temperature=temperature,
+            top_p=top_p,
+            seed=seed,
             device=resolved,
             on_progress=generation_progress,
         )
@@ -189,7 +199,9 @@ def generate_from_audio(
             course,
             level=chart_level,
             greedy=greedy,
-            seed=0,
+            temperature=temperature,
+            top_p=top_p,
+            seed=seed,
             device=resolved,
             on_progress=generation_progress,
         )
@@ -211,4 +223,125 @@ def generate_from_audio(
         timing_mode=timing_mode,
         model_id=model_id,
         device=resolved,
+    )
+
+
+def generate_best_of_audio(
+    audio_path: str | Path,
+    *,
+    course: str = "oni",
+    level: int | None = None,
+    bpm: float | None = None,
+    model_id: str = DEFAULT_MODEL_ID,
+    device: str | None = None,
+    candidate_count: int = 4,
+    reference_root: str | Path = "output/reference_corpus",
+    mapper: str | None = None,
+    sample_temperature: float = 0.65,
+    sample_top_p: float = 0.90,
+    on_progress: Callable[[int, str], None] | None = None,
+) -> GeneratedChart:
+    """Generate a deterministic baseline plus sampled alternatives and rerank them.
+
+    If the local human-reference scorer is unavailable, return the baseline chart
+    immediately instead of spending time on sampled candidates.
+    """
+    from taikonation.generation.quality import score_generated_events
+
+    candidate_count = max(1, int(candidate_count))
+
+    def scaled_progress(index: int):
+        def report(percent: int, message: str) -> None:
+            if not on_progress:
+                return
+            start = int(index * 88 / candidate_count)
+            span = max(1, int(88 / candidate_count))
+            scaled = min(88, start + int(span * max(0, min(percent, 100)) / 100))
+            on_progress(
+                scaled,
+                f"Candidate {index + 1}/{candidate_count}: {message}",
+            )
+        return report
+
+    baseline = generate_from_audio(
+        audio_path,
+        course=course,
+        level=level,
+        bpm=bpm,
+        model_id=model_id,
+        device=device,
+        greedy=True,
+        seed=0,
+        on_progress=scaled_progress(0),
+    )
+
+    try:
+        baseline_score = score_generated_events(
+            baseline.events,
+            bpm=baseline.bpm,
+            difficulty=course,
+            reference_root=reference_root,
+            mapper=mapper,
+        )
+    except Exception:
+        if on_progress:
+            on_progress(90, "Human reference scorer unavailable; using deterministic chart")
+        return baseline
+
+    best_chart = baseline
+    best_score = baseline_score
+    best_seed = 0
+    candidate_scores = [
+        {"seed": 0, "greedy": True, "score": baseline_score.score}
+    ]
+
+    for index in range(1, candidate_count):
+        seed = 2000 + index
+        candidate = generate_from_audio(
+            audio_path,
+            course=course,
+            level=level,
+            bpm=bpm,
+            model_id=model_id,
+            device=device,
+            greedy=False,
+            seed=seed,
+            temperature=sample_temperature,
+            top_p=sample_top_p,
+            on_progress=scaled_progress(index),
+        )
+        try:
+            candidate_score = score_generated_events(
+                candidate.events,
+                bpm=candidate.bpm,
+                difficulty=course,
+                reference_root=reference_root,
+                mapper=mapper,
+            )
+        except Exception:
+            continue
+        candidate_scores.append(
+            {"seed": seed, "greedy": False, "score": candidate_score.score}
+        )
+        if candidate_score.score < best_score.score:
+            best_chart = candidate
+            best_score = candidate_score
+            best_seed = seed
+
+    if on_progress:
+        on_progress(
+            92,
+            (
+                f"Selected best of {candidate_count} candidates "
+                f"(human-reference score {best_score.score:.3f})"
+            ),
+        )
+
+    return replace(
+        best_chart,
+        quality_score=best_score.score,
+        candidate_count=candidate_count,
+        candidate_seed=best_seed,
+        quality_neighbors=best_score.neighbors,
+        candidate_scores=tuple(candidate_scores),
     )

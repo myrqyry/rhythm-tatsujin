@@ -153,3 +153,36 @@ def test_import_osz_filters_standard_maps_and_keeps_audio_local(tmp_path: Path):
     assert mapper_profiles["Nifty"]["maps"] == 2
     assert mapper_profiles["Nifty"]["sets"] == 1
     assert mapper_profiles["Nifty"]["difficulty_profile"]["oni"]["maps"] == 1
+
+
+def test_analysis_extracts_rhythm_structure_features():
+    repeating = parse_osu(
+        _osu(
+            mode=1,
+            version="Oni",
+            beatmap_id=20,
+            set_id=200,
+            notes=[
+                (0, 0),
+                (250, 8),
+                (500, 0),
+                (750, 8),
+                (1000, 0),
+                (1250, 8),
+                (1500, 0),
+                (1750, 8),
+            ],
+        )
+    )
+
+    stats = analyze_taiko_map(repeating)
+
+    assert stats["color_change_ratio"] == 1.0
+    assert stats["color_bigram_entropy"] > 0.45
+    assert stats["mean_color_run_length"] == 1.0
+    assert stats["repeated_motif_4_share"] == 1.0
+    assert stats["subdivision_change_ratio"] == 0.0
+    assert stats["mean_burst_length"] == 8.0
+    assert stats["burst_4plus_note_share"] == 1.0
+    assert stats["rest_interval_share"] == 0.0
+    assert stats["peak_section_ratio"] == 1.0
