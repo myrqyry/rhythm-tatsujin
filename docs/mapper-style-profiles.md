@@ -71,3 +71,12 @@ For generated-map evaluation, keep three scores conceptually separate:
 Do not collapse these into one metric. A map can be excellent without imitating
 one mapper, and a stylistically similar map can still be poor if its timing or
 difficulty progression is wrong.
+
+
+## Statistical follow-up
+
+The first difficulty-controlled song-level statistical pass is recorded in
+`docs/wolfram-mapper-analysis.md`. It finds a real multivariate mapper signal,
+but the current six coarse metrics achieve only 59.1% held-out balanced
+accuracy, so mapper-style scoring should remain a soft prior until richer rhythm
+features improve generalization.
