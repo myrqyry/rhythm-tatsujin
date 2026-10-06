@@ -88,6 +88,20 @@ output/
 dummy_*.npy
 dummy_*.wav
 
+# Raw local song audio is runtime/user data. The tracked research corpus uses
+# precomputed .npy features, so never scoop source songs into a checkpoint.
+input_songs/*.wav
+input_songs/*.mp3
+input_songs/*.flac
+input_songs/*.ogg
+input_songs/*.m4a
+input_songs/*.aac
+
+# Local human-reference beatmap archives/audio. Keep copyrighted source assets
+# out of Git; taikonation-import-reference writes extracted data under output/.
+reference_osz/
+*.osz
+
 # Optional (commented): large folders you may want to ignore
 # /model/
 # /output/

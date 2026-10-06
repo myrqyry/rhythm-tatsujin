@@ -20,6 +20,7 @@ def test_save_osu_chart_writes_timing_points(tmp_path: Path):
         audio_filename="song.wav",
         title="Song",
         artist="Artist",
+        difficulty="oni",
         bpm=150.0,
         offset_ms=800,
     )
@@ -28,12 +29,13 @@ def test_save_osu_chart_writes_timing_points(tmp_path: Path):
     assert "[TimingPoints]" in content
     assert "800,400.000000" in content  # 60000/150
     assert "[HitObjects]" in content
+    assert "Version:Oni" in content
 
-    # Ensure timestamps start at offset and advance by half-beat (200ms at 150 BPM).
+    # Timestamps follow the model's fixed 46.4ms frames, independent of BPM.
     hit_lines = [line for line in content.splitlines() if line.startswith("256,192,")]
     assert len(hit_lines) == 3
     times = [int(line.split(",")[2]) for line in hit_lines]
-    assert times == [800, 1000, 1200]
+    assert times == [800, 846, 893]
     assert hit_lines[0].endswith("1:0:0:70:")
     assert hit_lines[1].endswith("1:2:0:70:")
 

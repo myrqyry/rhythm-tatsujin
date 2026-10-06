@@ -102,3 +102,32 @@ def test_store_pagination_and_counts(tmp_path: Path):
     assert store.count_tasks() == 4
     tasks_page = store.list_tasks(limit=2, offset=1)
     assert len(tasks_page) == 2
+
+def test_unfinished_tasks_are_marked_interrupted_after_restart(tmp_path: Path):
+    store = StudioStore(tmp_path / "studio.sqlite3")
+    created = "2026-10-05T00:00:00+00:00"
+
+    queued = store.create_task(task_type="generation", payload={}, created_at=created)
+    running = store.create_task(task_type="training", payload={}, created_at=created)
+    complete = store.create_task(task_type="generation", payload={}, created_at=created)
+
+    store.update_task(
+        running["id"],
+        status="running",
+        message="working",
+        updated_at=created,
+    )
+    store.update_task(
+        complete["id"],
+        status="completed",
+        progress=100,
+        message="done",
+        updated_at=created,
+    )
+
+    interrupted = store.interrupt_unfinished_tasks(updated_at="2026-10-05T00:01:00+00:00")
+
+    assert interrupted == 2
+    assert store.get_task(queued["id"])["status"] == "interrupted"
+    assert store.get_task(running["id"])["status"] == "interrupted"
+    assert store.get_task(complete["id"])["status"] == "completed"

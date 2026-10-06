@@ -1,0 +1,69 @@
+{
+  "schema_version": 2,
+  "kit_id": "softchart-modal-resonator-v1",
+  "license": "MIT",
+  "sample_rate": 48000,
+  "generator": "scripts/build_taiko_synth.py",
+  "method": "seeded noise/impulse excitation, modal resonators, decaying pitch sweep, band-limited transient calibration, and offline RMS-envelope calibration",
+  "random_seed": 20260713,
+  "reference_policy": "Reference audio is used only for offline RMS-envelope and level calibration; it is not copied, mixed, embedded, or required at runtime.",
+  "files": [
+    {
+      "filename": "don-big.wav",
+      "kind": "don_big",
+      "sha256": "9e0be6c32867328aef834d4021b6506a6c7174fe3ced9ecb264d58b50ae712de",
+      "pcm_sha256": "14e81e7f92a418f2e4950b989c9c93e5d25f9d5ed990c02838b127c46c23584f",
+      "sample_rate": 48000,
+      "channels": 1,
+      "frames": 42946,
+      "anchor_frame": 866,
+      "profile": {
+        "centroid_hz": 118.42,
+        "attack_centroid_hz": 1672.916,
+        "tail_centroid_hz": 112.667,
+        "peak_seconds_after_anchor": 0.006646,
+        "t90_seconds_after_anchor": 0.352333,
+        "t99_seconds_after_anchor": 0.508687,
+        "crest_db": 11.994
+      }
+    },
+    {
+      "filename": "don.wav",
+      "kind": "don",
+      "sha256": "b2ef1660a03f208c054dfb51c4e0778090d43a24dab592c60992c84a97e384f4",
+      "pcm_sha256": "62adc81419fb47950e1fd76e9c302085d680e8d404efd023e84b5a1d66266522",
+      "sample_rate": 48000,
+      "channels": 1,
+      "frames": 39836,
+      "anchor_frame": 866,
+      "profile": {
+        "centroid_hz": 101.648,
+        "attack_centroid_hz": 1842.387,
+        "tail_centroid_hz": 111.714,
+        "peak_seconds_after_anchor": 0.007833,
+        "t90_seconds_after_anchor": 0.248979,
+        "t99_seconds_after_anchor": 0.460375,
+        "crest_db": 12.25
+      }
+    },
+    {
+      "filename": "katsu.wav",
+      "kind": "katsu",
+      "sha256": "54e8c93363d9dd1fb4703397ba4f1b4156e64697108895edd2e8c57c743c7706",
+      "pcm_sha256": "20d38df7d06bb4519363108e1ccb61dbfe98749c41b17ec9d99f22f47af1d5ab",
+      "sample_rate": 48000,
+      "channels": 1,
+      "frames": 19537,
+      "anchor_frame": 866,
+      "profile": {
+        "centroid_hz": 1819.101,
+        "attack_centroid_hz": 2716.187,
+        "tail_centroid_hz": 1721.006,
+        "peak_seconds_after_anchor": 0.005896,
+        "t90_seconds_after_anchor": 0.074875,
+        "t99_seconds_after_anchor": 0.1385,
+        "crest_db": 20.199
+      }
+    }
+  ]
+}

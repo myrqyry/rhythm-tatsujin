@@ -1,186 +1,89 @@
-# TaikoNation Studio Web Interface
+# Rhythm Tatsujin
 
-A comprehensive web interface for the TaikoNation AI taiko chart generation system.
+FastAPI is the only web backend. The studio uses the same package/runtime as the CLI.
 
-## Features
+## Start
 
-- **Model Training**: Train both modern PyTorch Transformer and legacy TensorFlow CNN-LSTM models
-- **Chart Generation**: Generate taiko charts with AI from uploaded audio files  
-- **Human Evaluation**: Collect human feedback on generated charts for RLHF
-- **Real-time Monitoring**: Live progress tracking and system logs
-- **Configuration Management**: Easy parameter tuning and settings management
+From the repository root:
 
-## File Structure
+~~~bash
+uv sync --group dev
+uv run taikonation-serve
+~~~
 
-```
-TaikoNationV1/
-├── web/                          # 🆕 Add this folder
-│   ├── server.py                # Flask backend server
-│   ├── index.html               # Main interface
-│   ├── requirements.txt         # Python dependencies
-│   ├── static/
-│   │   ├── css/
-│   │   │   └── styles.css      # Dark theme CSS
-│   │   └── js/
-│   │       └── app.js          # JavaScript application
-├── config/                      # Your existing config
-├── model/                       # Your existing models
-└── [other existing files]       # Keep as-is
-```
+Open http://127.0.0.1:5000.
 
-## Installation
+Do not start the server from web/ and do not install a second web-only environment.
 
-1. **Create the web directory** inside your TaikoNationV1 folder:
-   ```bash
-   cd TaikoNationV1
-   mkdir -p web/static/css web/static/js
-   ```
+## Generation flow
 
-2. **Copy the generated files** into the correct locations:
-   - `web-interface-index.html` → `web/index.html`
-   - `web-interface-styles.css` → `web/static/css/styles.css`
-   - `web-interface-app.js` → `web/static/js/app.js`
-   - `web-interface-server.py` → `web/server_fastapi.py`
-   - `web-requirements.txt` → `web/requirements.txt`
+1. Upload WAV/MP3/FLAC/OGG/M4A/AAC.
+2. The server stores the upload and performs best-effort duration/BPM inspection for display.
+3. Leave the BPM field blank to let the Taiko model fit timing itself, or type a BPM to use it as a trusted override.
+4. Pick a difficulty and generate.
+5. The pretrained Taiko model performs log-mel preprocessing, timing/grid fitting, constrained chart decoding, and osu!taiko export.
+6. Progress arrives through Socket.IO; task and chart metadata are persisted in output/studio.sqlite3.
+7. Generated .osu files can be downloaded, edited, rated, or evaluated.
 
-3. **Install dependencies**:
-   ```bash
-   cd web
-   pip install -r requirements.txt
-   ```
+The old browser-side MediaPipe classifier and Flask backend were removed because neither was part of a real generation path.
 
-## Usage
+## Main API
 
-1. **Start the server**:
-   ```bash
-   cd web
-   uvicorn server_fastapi:socket_app --host 127.0.0.1 --port 5000 --reload
-   ```
+- GET /api/status
+- POST /api/upload-audio
+- POST /api/generate-chart
+- GET /api/tasks
+- GET /api/tasks/{task_id}
+- POST /api/tasks/{task_id}/cancel
+- GET /api/charts
+- GET /api/chart-data
+- GET /api/download-chart
+- POST /api/save-chart
+- POST /api/submit-rating
+- POST /api/submit-evaluation
+- POST /api/start-training
+- POST /api/stop-training
+- GET /api/research/experiments
+- GET /api/research/export-dataset
 
-2. **Access the interface**: Open http://localhost:5000 in your browser
+Run uv run python tools/route_audit.py to regenerate the authoritative route inventory in docs/flask-migration-status.md.
 
-3. **Upload audio**: Drag and drop MP3/WAV/OGG/FLAC files to generate charts
+## Socket.IO events
 
-## Security Configuration
+- generation_progress
+- generation_failed
+- chart_generated
+- training_progress
+- training_failed
+- system_log
 
-For production deployment, set an API token:
+## Authentication
 
-```
-export TAIKONATION_API_TOKEN="your-secure-random-token-here"
-```
+Local development works without a token. To protect mutable endpoints:
 
-Include this token in requests as:
-- Header: `Authorization: Bearer your-token`
-- Query param: `?api_token=your-token`
-- Form field: `api_token=your-token`
+~~~bash
+export TAIKONATION_API_TOKEN="your-token"
+uv run taikonation-serve
+~~~
 
-4. **Configure training**: Set hyperparameters for transformer or legacy models
+The browser sends the token from local storage as Authorization: Bearer <token> when configured.
 
-5. **Monitor progress**: View real-time training and generation progress
+## Training
 
-## Integration with TaikoNation
+The Training page controls the local PyTorch research transformer, not the pretrained production generator. It uses the paired arrays in input_songs/ and input_charts_nr/.
 
-This interface directly integrates with your existing TaikoNation modules:
+Before a long run, use the CLI smoke proof:
 
-- `audio_processing.py` - For feature extraction
-- `transformer_model.py` - PyTorch transformer architecture  
-- `model.py` - Legacy TensorFlow CNN-LSTM model
-- `config/default.yaml` - Configuration management
-- `tokenization.py` - Chart tokenization system
+~~~bash
+uv run taikonation-train --smoke
+~~~
 
-## API Endpoints
+## Validation
 
-- `GET /api/status` - System status
-- `POST /api/upload-audio` - Upload audio files
-- `POST /api/start-training` - Start model training
-- `POST /api/generate-chart` - Generate charts
-- `GET /api/charts` - List generated charts
-- `POST /api/submit-evaluation` - Submit human evaluations
+~~~bash
+uv run pytest -q
+uv run python tools/route_audit.py
+node --check web/static/js/app.js
+~~~
 
-## WebSocket Events
-
-Real-time updates via WebSocket:
-- `training_progress` - Training progress updates
-- `generation_progress` - Chart generation progress  
-- `system_log` - System log messages
-- `chart_generated` - New chart notifications
-
-## Configuration
-
-The interface uses your existing `config/default.yaml` file and provides a web UI for:
-
-- Model architecture parameters (d_model, attention heads, layers)
-- Training settings (learning rate, batch size, epochs)
-- Audio processing settings (feature size, quantization)
-- Generation parameters (difficulty, pattern style)
-
-## Human Evaluation System
-
-Collect multi-criteria feedback on generated charts:
-- **Fun Factor**: Subjective enjoyment rating
-- **Musicality**: How well notes match the music
-- **Playability**: Physical comfort and flow
-- **Pattern Coherence**: Logical pattern structure
-- **Difficulty Accuracy**: Appropriate for target skill level
-
-This data can be used for reinforcement learning from human feedback (RLHF) to improve the AI models.
-
-## Dark Theme Features
-
-- Compact, minimal design with reduced padding
-- Multiple aesthetic themes (Cyberpunk, Deep Space, Electric)
-- Interactive taiko drums with authentic styling
-- Professional color scheme optimized for extended use
-
-## Troubleshooting
-
-**Import Errors**: Make sure you're running the server from the `web/` directory inside TaikoNationV1, and that all TaikoNation dependencies are installed.
-
-**Port Issues**: If port 5000 is in use, modify the port in your `uvicorn` command.
-
-**File Upload Issues**: Check that the `input_songs/` and `output/` directories exist and are writable.
-
-**Training Issues**: Verify that your training data is properly formatted in the `input_charts_nr/` directory.
-
-## FastAPI runtime (default)
-
-This repository also includes a FastAPI ASGI server at `web/server_fastapi.py` which provides the same API surface but uses an async Socket.IO server and works well with `uvicorn` (no eventlet required).
-
-Why use FastAPI?
-- Async first — works better with asyncio-based workers and modern async libraries.
-- Built-in OpenAPI docs (`/docs`) and automatic request validation via Pydantic.
-- Easier deployment with `uvicorn` / ASGI hosts.
-
-Quickstart (FastAPI)
-
-1. Create and activate a virtualenv and install web deps:
-```bash
-cd web
-python3 -m venv .venv
-source .venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-2. Run the FastAPI ASGI app with Uvicorn:
-```bash
-# Run the ASGI Socket.IO + FastAPI app
-uvicorn server_fastapi:socket_app --host 127.0.0.1 --port 5001 --reload
-```
-
-3. Open the UI in your browser at http://127.0.0.1:5001
-
-Notes about configuration and environment variables
-- `TAIKONATION_SECRET_KEY` — optional Flask/legacy secret; not required for FastAPI but safe to set.
-- `TAIKONATION_API_TOKEN` — optional API token. If set, POST endpoints require the token via `Authorization: Bearer <token>` header or a form field named `api_token`.
-- For production, run behind a reverse proxy (nginx) and use HTTPS.
-
-Background jobs and workers
-- The FastAPI server includes simulated background generation for demo purposes. For real training and chart generation you should run heavy jobs in a separate worker process (Celery, RQ, or a dedicated microservice) and emit progress via Socket.IO or push to a shared database.
-
-Compatibility notes
-- FastAPI is the primary runtime for this project. The legacy Flask server can be kept only for reference during migration windows.
-
-If you want, I can:
-- Add a small `docker-compose` recipe to run the FastAPI server + a worker + Redis for background tasks.
-- Scaffold a Celery worker that publishes Socket.IO events back to the FastAPI app.
+For the generation runtime, the final acceptance check is an actual audio file through the model to a valid .osu artifact.

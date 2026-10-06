@@ -62,9 +62,9 @@ class TaikoTransformer(nn.Module):
         self._compiled = False
 
     def _generate_square_subsequent_mask(self, sz):
-        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
-        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
-        return mask
+        # Boolean masks compose cleanly with boolean padding masks on current
+        # PyTorch and avoid the deprecated mixed float/bool mask path.
+        return torch.triu(torch.ones(sz, sz, dtype=torch.bool), diagonal=1)
 
     def _checkpoint_forward(self, module, *args, **kwargs):
         """Wrapper for gradient checkpointing"""
@@ -81,12 +81,16 @@ class TaikoTransformer(nn.Module):
             return compiled_model
         return self
 
-    def forward(self, src, tgt, genre_id, difficulty_id):
+    def forward(self, src, tgt, genre_id, difficulty_id, padding_mask=None):
         # Input validation
         if src.dim() != 3:
             raise ValueError(f"Expected src to be 3D (batch,seq,feat); got shape {tuple(src.shape)}")
         if tgt.dim() != 2:
             raise ValueError(f"Expected tgt to be 2D (batch,seq); got shape {tuple(tgt.shape)}")
+        if padding_mask is not None and padding_mask.shape != tgt.shape:
+            raise ValueError(
+                f"Expected padding_mask shape {tuple(tgt.shape)}; got {tuple(padding_mask.shape)}"
+            )
 
         # Prepare encoder input
         src = self.audio_input_projection(src) * math.sqrt(self.d_model)
@@ -101,17 +105,22 @@ class TaikoTransformer(nn.Module):
         # Create causal mask
         tgt_mask = self._generate_square_subsequent_mask(tgt.size(1)).to(src.device)
 
-        # Encoder pass with optional checkpointing
-        with torch.nn.attention.sdpa_kernel(torch.nn.attention.SDPBackend.FLASH_ATTENTION):
-            memory = self._checkpoint_forward(self.transformer_encoder, src)
-
-            # Decoder pass with optional checkpointing
-            output = self._checkpoint_forward(
-                self.transformer_decoder,
-                tgt_prepared,
-                memory,
-                tgt_mask=tgt_mask
-            )
+        # Let PyTorch select the best scaled-dot-product attention backend for
+        # the current device. Forcing FlashAttention breaks CPU fallback and
+        # older CUDA GPUs such as Turing/sm75.
+        memory = self._checkpoint_forward(
+            self.transformer_encoder,
+            src,
+            src_key_padding_mask=padding_mask,
+        )
+        output = self._checkpoint_forward(
+            self.transformer_decoder,
+            tgt_prepared,
+            memory,
+            tgt_mask=tgt_mask,
+            tgt_key_padding_mask=padding_mask,
+            memory_key_padding_mask=padding_mask,
+        )
 
         return self.fc_out(output)
 

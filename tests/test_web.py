@@ -8,8 +8,26 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
+import pytest
+
 from web import server_fastapi as web_server
+from web.persistence import StudioStore
 from fastapi import UploadFile
+
+
+@pytest.fixture(autouse=True)
+def isolated_web_runtime(tmp_path: Path, monkeypatch):
+    upload_dir = tmp_path / "uploads"
+    output_dir = tmp_path / "output"
+    upload_dir.mkdir()
+    output_dir.mkdir()
+    monkeypatch.setattr(web_server, "UPLOAD_FOLDER", upload_dir)
+    monkeypatch.setattr(web_server, "CHART_OUTPUT_FOLDER", output_dir)
+    monkeypatch.setattr(web_server, "store", StudioStore(output_dir / "studio.sqlite3"))
+    web_server.system_logs.clear()
+    web_server.generated_charts.clear()
+    web_server.human_evaluations.clear()
+    web_server.active_tasks.clear()
 
 
 def test_status_endpoint():

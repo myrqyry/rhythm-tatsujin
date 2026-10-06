@@ -18,25 +18,29 @@ class TestCli(unittest.TestCase):
         np.save(self.sample_npy_path, np.random.rand(100, 80))
         # Create a dummy model file
         self.model_path = "tests/dummy_model.pth"
-        config = {
-            'model': {
-                'd_model': 256,
-                'nhead': 8,
-                'num_encoder_layers': 6,
-                'num_decoder_layers': 6,
-                'dim_feedforward': 1024,
-                'dropout': 0.1,
-                'audio_feature_size': 80,
-                'max_sequence_length': 512
-            }
+        model_config = {
+            'd_model': 32,
+            'nhead': 4,
+            'num_encoder_layers': 1,
+            'num_decoder_layers': 1,
+            'dim_feedforward': 64,
+            'dropout': 0.0,
+            'audio_feature_size': 80,
+            'max_sequence_length': 128,
         }
         model = TaikoTransformer(
             vocab_size=TaikoTokenizer().vocab_size,
             num_genres=10,
             num_difficulties=len(DIFFICULTY_MAP),
-            **config['model']
+            **model_config
         )
-        torch.save({'model_state_dict': model.state_dict()}, self.model_path)
+        torch.save(
+            {
+                'model_state_dict': model.state_dict(),
+                'model_config': {**model_config, 'num_genres': 10},
+            },
+            self.model_path,
+        )
 
     def tearDown(self):
         if os.path.exists(self.sample_npy_path):

@@ -43,16 +43,21 @@ class CheckpointManager:
             filename = f'last_epoch{epoch}_{timestamp}.pth'
 
         checkpoint_path = self.checkpoint_dir / filename
-        config['model']['num_genres'] = model.genre_embedding.num_embeddings
+        model_config = {
+            **config['model'],
+            'num_genres': model.genre_embedding.num_embeddings,
+            'max_sequence_length': int(model.pos_encoder.pe.shape[1]),
+        }
         checkpoint = {
             'epoch': epoch,
             'model_state_dict': model.state_dict(),
             'optimizer_state_dict': optimizer.state_dict(),
             'val_loss': val_loss,
-            'model_config': config['model'],
+            'model_config': model_config,
+            'data_config': config['data'],
             'training_config': config['training'],
             'timestamp': timestamp,
-            'pytorch_version': torch.__version__,
+            'pytorch_version': str(torch.__version__),
             'checkpoint_type': checkpoint_type
         }
 
@@ -137,10 +142,10 @@ class MetricsTracker:
     def compute(self):
         """Compute final metrics"""
         metrics = {}
-        metrics['loss'] = np.mean(self.losses) if self.losses else 0.0
-        metrics['perplexity'] = np.exp(metrics['loss'])
+        metrics['loss'] = float(np.mean(self.losses)) if self.losses else 0.0
+        metrics['perplexity'] = float(np.exp(metrics['loss']))
         if len(self.predictions) > 0:
-            metrics['accuracy'] = np.mean(np.array(self.predictions) == np.array(self.targets))
+            metrics['accuracy'] = float(np.mean(np.array(self.predictions) == np.array(self.targets)))
         else:
             metrics['accuracy'] = 0.0
 
@@ -176,9 +181,9 @@ class MetricsTracker:
         )
 
         return {
-            'macro': f1_macro,
+            'macro': float(f1_macro),
             'per_token': {
-                self.tokenizer.id_to_token.get(label, f"id_{label}"): score
+                self.tokenizer.id_to_token.get(label, f"id_{label}"): float(score)
                 for label, score in zip(unique_labels, f1_per_class)
             }
         }
@@ -277,177 +282,304 @@ def create_optimizer_and_scheduler(model, config, total_steps):
 
     return optimizer, scheduler
 
-def train_fold(config, fold_idx):
+def train_fold(config, fold_idx, *, total_folds=1, progress_callback=None):
     run_name = f"fold_{fold_idx + 1}"
-    wandb.init(project="TaikoNation-Genre-Conditioning", config=config, name=run_name, reinit=True)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"--- Starting Fold {fold_idx + 1} on {device} ---")
+    use_wandb = bool(config['training'].get('use_wandb', False))
+    if use_wandb:
+        wandb.init(
+            project="TaikoNation-Genre-Conditioning",
+            config=config,
+            name=run_name,
+            reinit=True,
+        )
 
-    # Set seed for reproducibility
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"--- Starting Fold {fold_idx + 1}/{total_folds} on {device} ---")
     set_seed(config['training'].get('seed', 42) + fold_idx)
 
-    with ExperimentTracker(f"train_fold_{fold_idx}", config) as tracker:
-        train_loader, val_loader, tokenizer, genre_vocab = get_transformer_data_loaders(config, fold_idx)
-        if not train_loader:
-            wandb.finish()
-            return
+    try:
+        with ExperimentTracker(f"train_fold_{fold_idx}", config) as tracker:
+            train_loader, val_loader, tokenizer, genre_vocab = get_transformer_data_loaders(config, fold_idx)
+            if train_loader is None or val_loader is None:
+                raise RuntimeError("Could not build training/validation loaders")
 
-        model = TaikoTransformer(
-            vocab_size=tokenizer.vocab_size,
-            num_genres=len(genre_vocab),
-            num_difficulties=len(DIFFICULTY_MAP),
-            **config['model']
-        ).to(device)
-        wandb.watch(model, log="all")
+            # Persist training-fold normalization with the checkpoint so
+            # research inference sees exactly the same feature distribution.
+            train_dataset = train_loader.dataset
+            if train_dataset.feature_mean is not None and train_dataset.feature_std is not None:
+                config['data']['feature_mean'] = train_dataset.feature_mean.tolist()
+                config['data']['feature_std'] = train_dataset.feature_std.tolist()
 
-        criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.vocab["[PAD]"])
-        total_steps = len(train_loader) * config['training']['num_epochs']
-        optimizer, scheduler = create_optimizer_and_scheduler(model, config, total_steps)
-        scaler = torch.cuda.amp.GradScaler()
+            model_config = dict(config['model'])
+            model_config.setdefault(
+                'max_sequence_length',
+                int(config['data']['max_sequence_length']),
+            )
+            model = TaikoTransformer(
+                vocab_size=tokenizer.vocab_size,
+                num_genres=len(genre_vocab),
+                num_difficulties=len(DIFFICULTY_MAP),
+                **model_config,
+            ).to(device)
+            if use_wandb:
+                wandb.watch(model, log="all")
 
-        best_val_loss = float('inf')
+            criterion = nn.CrossEntropyLoss(ignore_index=tokenizer.vocab["[PAD]"])
+            desired_batch_size = int(config['training'].get('effective_batch_size', config['training']['batch_size']))
+            actual_batch_size = int(config['training']['batch_size'])
+            accumulation_steps = max(1, math.ceil(desired_batch_size / actual_batch_size))
+            optimizer_steps_per_epoch = max(1, math.ceil(len(train_loader) / accumulation_steps))
+            total_steps = optimizer_steps_per_epoch * int(config['training']['num_epochs'])
+            optimizer, scheduler = create_optimizer_and_scheduler(model, config, total_steps)
 
-        checkpoint_dir = Path(config['training']['save_path']).parent / f'checkpoints_fold{fold_idx+1}'
-        checkpoint_manager = CheckpointManager(
-            checkpoint_dir,
-            keep_best_n=config['training'].get('keep_best_n', 3),
-            keep_last_n=config['training'].get('keep_last_n', 2),
-            save_every_n_epochs=config['training'].get('save_every_n_epochs', 5)
-        )
+            use_amp = device.type == "cuda"
+            scaler = torch.amp.GradScaler("cuda", enabled=use_amp)
 
-        early_stopping = EarlyStopping(
-            patience=config['training'].get('early_stopping_patience', 10),
-            min_delta=config['training'].get('early_stopping_delta', 1e-4),
-            mode='min',
-            verbose=True
-        )
-
-        desired_batch_size = config['training'].get('effective_batch_size', 32)
-        actual_batch_size = config['training']['batch_size']
-        accumulation_steps = max(1, desired_batch_size // actual_batch_size)
-        print(f"Using gradient accumulation: {accumulation_steps} steps")
-        print(f"Effective batch size: {actual_batch_size * accumulation_steps}")
-
-        for epoch in range(config['training']['num_epochs']):
-            model.train()
-            train_metrics = MetricsTracker(tokenizer)
-            optimizer.zero_grad()
-            for batch_idx, batch in enumerate(train_loader):
-                if not batch: continue
-                encoder_input = batch["encoder_input"].to(device)
-                decoder_input = batch["decoder_input"].to(device)
-                target = batch["target"].to(device)
-                genre_id = batch["genre_id"].to(device)
-                difficulty_id = batch["difficulty"].to(device)
-
-                with torch.cuda.amp.autocast():
-                    output = model(encoder_input, decoder_input, genre_id, difficulty_id)
-                    loss = criterion(output.view(-1, tokenizer.vocab_size), target.view(-1))
-                    loss = loss / accumulation_steps
-
-                scaler.scale(loss).backward()
-                train_metrics.update(output, target, loss * accumulation_steps)
-
-                if (batch_idx + 1) % accumulation_steps == 0:
-                    scaler.unscale_(optimizer)
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                    scaler.step(optimizer)
-                    scaler.update()
-                    optimizer.zero_grad()
-                    if config['training'].get('scheduler_type') in ['cosine_warmup']:
-                        scheduler.step()
-
-            if (batch_idx + 1) % accumulation_steps != 0:
+            def take_optimizer_step():
+                previous_scale = scaler.get_scale()
                 scaler.unscale_(optimizer)
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 scaler.step(optimizer)
                 scaler.update()
-                optimizer.zero_grad()
+                optimizer.zero_grad(set_to_none=True)
 
-            model.eval()
-            val_metrics = MetricsTracker(tokenizer)
-            with torch.no_grad():
-                for batch in val_loader:
-                    if not batch: continue
-                    encoder_input = batch["encoder_input"].to(device)
-                    decoder_input = batch["decoder_input"].to(device)
-                    target = batch["target"].to(device)
-                    genre_id = batch["genre_id"].to(device)
-                    difficulty_id = batch["difficulty"].to(device)
+                # GradScaler intentionally skips optimizer.step() on overflow.
+                # Do not advance a step-based scheduler when that happens.
+                optimizer_stepped = (not use_amp) or scaler.get_scale() >= previous_scale
+                if optimizer_stepped and config['training'].get('scheduler_type') == 'cosine_warmup':
+                    scheduler.step()
 
-                    output = model(encoder_input, decoder_input, genre_id, difficulty_id)
-                    loss = criterion(output.view(-1, tokenizer.vocab_size), target.view(-1))
-                    val_metrics.update(output, target, loss)
+            best_val_loss = float('inf')
 
-            train_results = train_metrics.compute()
-            val_results = val_metrics.compute()
-
-            if config['training'].get('scheduler_type') not in ['cosine_warmup']:
-                scheduler.step(val_results['loss'])
-
-            wandb.log({
-                'epoch': epoch,
-                'train/loss': train_results['loss'],
-                'train/accuracy': train_results['accuracy'],
-                'train/perplexity': train_results['perplexity'],
-                'val/loss': val_results['loss'],
-                'val/accuracy': val_results['accuracy'],
-                'val/perplexity': val_results['perplexity'],
-                'val/f1_macro': val_results['f1_scores']['macro'],
-                'learning_rate': optimizer.param_groups[0]['lr']
-            })
-
-            for note_type, acc in val_results['note_accuracies'].items():
-                wandb.log({f'val/accuracy_{note_type}': acc})
-
-            print(f"Epoch {epoch+1}/{config['training']['num_epochs']}")
-            print(f"  Train - Loss: {train_results['loss']:.4f}, Acc: {train_results['accuracy']:.4f}, PPL: {train_results['perplexity']:.2f}")
-            print(f"  Val   - Loss: {val_results['loss']:.4f}, Acc: {val_results['accuracy']:.4f}, PPL: {val_results['perplexity']:.2f}")
-
-            checkpoint_manager.save_checkpoint(
-                model, optimizer, epoch, val_results['loss'],
-                config, checkpoint_type='last'
+            checkpoint_dir = Path(config['training']['save_path']).parent / f'checkpoints_fold{fold_idx+1}'
+            checkpoint_manager = CheckpointManager(
+                checkpoint_dir,
+                keep_best_n=config['training'].get('keep_best_n', 3),
+                keep_last_n=config['training'].get('keep_last_n', 2),
+                save_every_n_epochs=config['training'].get('save_every_n_epochs', 5)
             )
 
-            if val_results['loss'] < best_val_loss:
-                best_val_loss = val_results['loss']
+            early_stopping = EarlyStopping(
+                patience=config['training'].get('early_stopping_patience', 10),
+                min_delta=config['training'].get('early_stopping_delta', 1e-4),
+                mode='min',
+                verbose=True
+            )
+
+            print(f"Using gradient accumulation: {accumulation_steps} steps")
+            print(f"Effective batch size: {actual_batch_size * accumulation_steps}")
+
+            train_results = {}
+            val_results = {}
+            num_epochs = int(config['training']['num_epochs'])
+
+            for epoch in range(num_epochs):
+                model.train()
+                train_metrics = MetricsTracker(tokenizer)
+                optimizer.zero_grad(set_to_none=True)
+                batches_seen = 0
+
+                for batch_idx, batch in enumerate(train_loader):
+                    if not batch:
+                        continue
+                    batches_seen += 1
+                    encoder_input = batch["encoder_input"].to(device, non_blocking=True)
+                    decoder_input = batch["decoder_input"].to(device, non_blocking=True)
+                    target = batch["target"].to(device, non_blocking=True)
+                    padding_mask = batch["padding_mask"].to(device, non_blocking=True)
+                    genre_id = batch["genre_id"].to(device, non_blocking=True)
+                    difficulty_id = batch["difficulty"].to(device, non_blocking=True)
+
+                    with torch.amp.autocast(device_type=device.type, enabled=use_amp):
+                        output = model(
+                            encoder_input,
+                            decoder_input,
+                            genre_id,
+                            difficulty_id,
+                            padding_mask=padding_mask,
+                        )
+                        raw_loss = criterion(
+                            output.reshape(-1, tokenizer.vocab_size),
+                            target.reshape(-1),
+                        )
+                        loss = raw_loss / accumulation_steps
+
+                    scaler.scale(loss).backward()
+                    train_metrics.update(output, target, raw_loss)
+
+                    if batches_seen % accumulation_steps == 0:
+                        take_optimizer_step()
+
+                if batches_seen == 0:
+                    raise RuntimeError("Training loader produced no valid batches")
+
+                if batches_seen % accumulation_steps != 0:
+                    take_optimizer_step()
+
+                model.eval()
+                val_metrics = MetricsTracker(tokenizer)
+                val_batches = 0
+                with torch.no_grad():
+                    for batch in val_loader:
+                        if not batch:
+                            continue
+                        val_batches += 1
+                        encoder_input = batch["encoder_input"].to(device, non_blocking=True)
+                        decoder_input = batch["decoder_input"].to(device, non_blocking=True)
+                        target = batch["target"].to(device, non_blocking=True)
+                        padding_mask = batch["padding_mask"].to(device, non_blocking=True)
+                        genre_id = batch["genre_id"].to(device, non_blocking=True)
+                        difficulty_id = batch["difficulty"].to(device, non_blocking=True)
+
+                        with torch.amp.autocast(device_type=device.type, enabled=use_amp):
+                            output = model(
+                                encoder_input,
+                                decoder_input,
+                                genre_id,
+                                difficulty_id,
+                                padding_mask=padding_mask,
+                            )
+                            loss = criterion(
+                                output.reshape(-1, tokenizer.vocab_size),
+                                target.reshape(-1),
+                            )
+                        val_metrics.update(output, target, loss)
+
+                if val_batches == 0:
+                    raise RuntimeError("Validation loader produced no valid batches")
+
+                train_results = train_metrics.compute()
+                val_results = val_metrics.compute()
+
+                scheduler_type = config['training'].get('scheduler_type')
+                if scheduler_type == 'cosine_restarts':
+                    scheduler.step(epoch + 1)
+                elif scheduler_type not in {'cosine_warmup'}:
+                    scheduler.step(val_results['loss'])
+
+                log_payload = {
+                    'epoch': epoch,
+                    'train/loss': train_results['loss'],
+                    'train/accuracy': train_results['accuracy'],
+                    'train/perplexity': train_results['perplexity'],
+                    'val/loss': val_results['loss'],
+                    'val/accuracy': val_results['accuracy'],
+                    'val/perplexity': val_results['perplexity'],
+                    'val/f1_macro': val_results.get('f1_scores', {}).get('macro', 0.0),
+                    'learning_rate': optimizer.param_groups[0]['lr'],
+                }
+                if use_wandb:
+                    wandb.log(log_payload)
+                    for note_type, acc in val_results['note_accuracies'].items():
+                        wandb.log({f'val/accuracy_{note_type}': acc})
+
+                print(f"Epoch {epoch+1}/{num_epochs}")
+                print(
+                    f"  Train - Loss: {train_results['loss']:.4f}, "
+                    f"Acc: {train_results['accuracy']:.4f}, "
+                    f"PPL: {train_results['perplexity']:.2f}"
+                )
+                print(
+                    f"  Val   - Loss: {val_results['loss']:.4f}, "
+                    f"Acc: {val_results['accuracy']:.4f}, "
+                    f"PPL: {val_results['perplexity']:.2f}"
+                )
+
                 checkpoint_manager.save_checkpoint(
                     model, optimizer, epoch, val_results['loss'],
-                    config, checkpoint_type='best'
-                )
-                print(f"  ✓ New best model saved!")
-
-            if checkpoint_manager.should_save_periodic(epoch):
-                checkpoint_manager.save_checkpoint(
-                    model, optimizer, epoch, val_results['loss'],
-                    config, checkpoint_type='periodic'
+                    config, checkpoint_type='last'
                 )
 
-            if early_stopping(epoch, val_results['loss']):
-                print(f"\nEarly stopping triggered at epoch {epoch+1}")
-                print(f"Best epoch was {early_stopping.best_epoch+1} with val_loss={-early_stopping.best_score:.4f}")
-                tracker.log_metric("best_epoch", early_stopping.best_epoch + 1)
-                tracker.log_metric("best_val_loss", -early_stopping.best_score)
-                break
+                if val_results['loss'] < best_val_loss:
+                    best_val_loss = val_results['loss']
+                    checkpoint_manager.save_checkpoint(
+                        model, optimizer, epoch, val_results['loss'],
+                        config, checkpoint_type='best'
+                    )
+                    print("  ✓ New best model saved!")
 
-        if config['training'].get('cleanup_checkpoints', False):
-            checkpoint_manager.cleanup_all_except_best()
+                if checkpoint_manager.should_save_periodic(epoch):
+                    checkpoint_manager.save_checkpoint(
+                        model, optimizer, epoch, val_results['loss'],
+                        config, checkpoint_type='periodic'
+                    )
 
-        print("--- Finished Supervised Training ---")
-        tracker.log_metrics({"final_train_results": train_results, "final_val_results": val_results})
+                if progress_callback is not None:
+                    progress_callback({
+                        'fold': fold_idx + 1,
+                        'folds': total_folds,
+                        'epoch': epoch + 1,
+                        'epochs': num_epochs,
+                        'train': train_results,
+                        'val': val_results,
+                    })
 
-        genre_vocab_path = os.path.join(os.path.dirname(config['training']['save_path']), "genre_vocab.json")
-        with open(genre_vocab_path, 'w') as f:
-            json.dump(genre_vocab, f)
-        print(f"Genre vocabulary saved to {genre_vocab_path}")
+                if early_stopping(epoch, val_results['loss']):
+                    print(f"\nEarly stopping triggered at epoch {epoch+1}")
+                    print(
+                        f"Best epoch was {early_stopping.best_epoch+1} "
+                        f"with val_loss={-early_stopping.best_score:.4f}"
+                    )
+                    tracker.log_metric("best_epoch", early_stopping.best_epoch + 1)
+                    tracker.log_metric("best_val_loss", float(-early_stopping.best_score))
+                    break
 
-        wandb.finish()
+            best_path = checkpoint_manager.get_best_checkpoint()
+            if best_path is None:
+                raise RuntimeError("Training completed without producing a best checkpoint")
 
-def main(config):
-    os.environ["WANDB_MODE"] = "offline"
-    num_folds = 1 if config.get('dry_run') else config['training']['k_folds']
+            if config['training'].get('cleanup_checkpoints', False):
+                checkpoint_manager.cleanup_all_except_best()
+
+            configured_output = Path(config['training']['save_path'])
+            configured_output.parent.mkdir(parents=True, exist_ok=True)
+            if total_folds == 1:
+                export_path = configured_output
+            else:
+                export_path = configured_output.with_name(
+                    f"{configured_output.stem}_fold{fold_idx+1}{configured_output.suffix}"
+                )
+            shutil.copy2(best_path, export_path)
+
+            print(f"--- Finished Fold {fold_idx + 1}; best checkpoint: {export_path} ---")
+            tracker.log_metrics({
+                "final_train_results": train_results,
+                "final_val_results": val_results,
+                "best_checkpoint": str(export_path),
+            })
+            tracker.save_artifact(export_path)
+
+            genre_vocab_path = configured_output.parent / "genre_vocab.json"
+            with open(genre_vocab_path, 'w') as handle:
+                json.dump(genre_vocab, handle, indent=2)
+            print(f"Genre vocabulary saved to {genre_vocab_path}")
+
+            return {
+                "fold": fold_idx + 1,
+                "checkpoint": str(export_path),
+                "train": train_results,
+                "val": val_results,
+            }
+    finally:
+        if use_wandb:
+            wandb.finish()
+
+
+def main(config, *, progress_callback=None):
+    os.environ.setdefault("WANDB_MODE", "offline")
+    num_folds = 1 if config.get('dry_run') else int(config['training']['k_folds'])
+    results = []
     for i in range(num_folds):
-        train_fold(config, i)
+        results.append(
+            train_fold(
+                config,
+                i,
+                total_folds=num_folds,
+                progress_callback=progress_callback,
+            )
+        )
+    return results
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train Taiko Transformer model with genre conditioning.")

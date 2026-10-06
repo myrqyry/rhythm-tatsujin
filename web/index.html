@@ -3,745 +3,396 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TaikoNation Studio - AI Taiko Chart Generator</title>
+    <title>Rhythm Tatsujin</title>
     <link rel="stylesheet" href="static/css/styles.css">
 </head>
 <body>
     <div class="main-container">
-        <div class="sidebar">
+        <aside class="sidebar">
             <div class="logo-section">
-                <div class="logo">🥁 TaikoNation</div>
-                <div class="tagline">AI Taiko Chart Generator</div>
+                <div class="logo">
+                    <svg class="logo-mark" viewBox="0 0 32 32" aria-hidden="true">
+                        <circle cx="16" cy="17" r="9"></circle>
+                        <path d="M9.5 7.5 6 4M22.5 7.5 26 4M8 17h16"></path>
+                    </svg>
+                    <span>Rhythm Tatsujin</span>
+                </div>
+                <div class="tagline">Audio → osu!taiko</div>
             </div>
+
             <nav class="nav-menu" aria-label="Main navigation">
                 <button class="nav-item active" data-page="dashboard" aria-current="page">
-                    <span class="nav-icon">📊</span>
-                    Dashboard
-                </button>
-                <button class="nav-item" data-page="training">
-                    <span class="nav-icon">🧠</span>
-                    Model Training
+                    <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"></path></svg>
+                    <span>Dashboard</span>
                 </button>
                 <button class="nav-item" data-page="generation">
-                    <span class="nav-icon">⚡</span>
-                    Chart Generation
+                    <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m13 2-7 11h6l-1 9 7-12h-6z"></path></svg>
+                    <span>Generate</span>
                 </button>
                 <button class="nav-item" data-page="library">
-                    <span class="nav-icon">📚</span>
-                    Chart Library
+                    <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v16H5zM8 8h8M8 12h8M8 16h5"></path></svg>
+                    <span>Library</span>
                 </button>
                 <button class="nav-item" data-page="evaluation">
-                    <span class="nav-icon">⭐</span>
-                    Human Evaluation
+                    <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 2.7 5.5 6.1.9-4.4 4.3 1 6-5.4-2.9-5.4 2.9 1-6-4.4-4.3 6.1-.9z"></path></svg>
+                    <span>Evaluate</span>
                 </button>
-                <button class="nav-item" data-page="config">
-                    <span class="nav-icon">⚙️</span>
-                    Configuration
+                <button class="nav-item" data-page="training">
+                    <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"></rect><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4M10 10h4v4h-4z"></path></svg>
+                    <span>Research Training</span>
                 </button>
                 <button class="nav-item" data-page="research">
-                    <span class="nav-icon">🔬</span>
-                    Research
+                    <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6M10 3v6l-5 9a2 2 0 0 0 1.7 3h10.6a2 2 0 0 0 1.7-3l-5-9V3M8.5 14h7"></path></svg>
+                    <span>Research</span>
                 </button>
             </nav>
-        </div>
+        </aside>
 
         <div class="content-area">
             <header class="header">
                 <h1 class="page-title" id="pageTitle">Dashboard</h1>
                 <div class="status-indicator">
                     <div class="status-dot" id="statusDot"></div>
-                    <span id="statusText">Connecting...</span>
+                    <span id="statusText">Connecting…</span>
                 </div>
             </header>
 
             <main class="main-content">
-                <!-- Dashboard Page -->
-                <div id="dashboard-page" class="page-content">
+                <section id="dashboard-page" class="page-content">
                     <div class="metrics-grid">
                         <div class="metric-card">
-                            <div class="metric-value" id="activeModels">-</div>
-                            <div class="metric-label">Active Models</div>
+                            <div class="metric-value" id="generatedCharts">0</div>
+                            <div class="metric-label">Generated charts</div>
                         </div>
                         <div class="metric-card">
-                            <div class="metric-value" id="generatedCharts">-</div>
-                            <div class="metric-label">Generated Charts</div>
+                            <div class="metric-value" id="ratedCharts">0</div>
+                            <div class="metric-label">Rated charts</div>
                         </div>
                         <div class="metric-card">
-                            <div class="metric-value" id="bestAccuracy">-</div>
-                            <div class="metric-label">Best Accuracy</div>
-                        </div>
-                        <div class="metric-card">
-                            <div class="metric-value" id="avgRating">-</div>
-                            <div class="metric-label">Avg Rating</div>
+                            <div class="metric-value" id="avgRating">—</div>
+                            <div class="metric-label">Average rating</div>
                         </div>
                     </div>
 
                     <div class="section-card">
                         <div class="section-header">
-                            <h2 class="section-title">System Status</h2>
-                            <button class="btn" onclick="refreshStatus()">Refresh</button>
+                            <div>
+                                <h2 class="section-title">Runtime</h2>
+                                <p class="section-copy">SoftChart v1.7 is the production generator. Local Transformer training is kept separate under Research Training.</p>
+                            </div>
+                            <button class="btn btn-secondary" id="refresh-status" type="button">Refresh</button>
                         </div>
                         <div class="log-container" id="systemLogs" role="log" aria-live="polite" aria-atomic="false">
                             <div class="log-entry">
-                                <span class="log-timestamp">[Loading...]</span>
-                                <span class="log-level-info">Initializing TaikoNation Studio...</span>
+                                <span class="log-timestamp">[starting]</span>
+                                <span class="log-level-info">Connecting to Rhythm Tatsujin…</span>
                             </div>
                         </div>
                     </div>
 
                     <div class="section-card">
                         <div class="section-header">
-                            <h2 class="section-title">Quick Actions</h2>
+                            <h2 class="section-title">Quick actions</h2>
                         </div>
                         <div class="form-row">
-                            <button class="btn" onclick="showPage('generation')">Generate New Chart</button>
-                            <button class="btn btn-secondary" onclick="showPage('training')">Start Training</button>
-                            <button class="btn btn-tertiary" onclick="showPage('evaluation')">Rate Charts</button>
+                            <button class="btn" type="button" data-go="generation">Generate chart</button>
+                            <button class="btn btn-secondary" type="button" data-go="library">Open library</button>
+                            <button class="btn btn-tertiary" type="button" data-go="evaluation">Evaluate charts</button>
                         </div>
                     </div>
-                </div>
+                </section>
 
-                <!-- Training Page -->
-                <div id="training-page" class="page-content hidden">
-                    <div class="section-card">
-                        <div class="section-header">
-                            <h2 class="section-title">Model Management</h2>
-                        </div>
-                        <div class="model-grid" id="modelGrid">
-                            <!-- Models will be loaded dynamically -->
-                        </div>
-                    </div>
-
-                    <div class="section-card">
-                        <div class="section-header">
-                            <h2 class="section-title">Training Configuration</h2>
-                        </div>
-                        <form id="trainingForm">
-                            <div class="tab-container">
-                                <div class="tab-nav">
-                                    <button type="button" class="tab-button active" onclick="showTab('transformer-config')">Transformer</button>
-                                    <button type="button" class="tab-button" onclick="showTab('legacy-config')">Legacy Model</button>
-                                </div>
-                            </div>
-                            
-                            <div id="transformer-config" class="tab-content active">
-                                <div class="form-row">
-                                    <div class="form-group">
-                                        <label class="form-label">Model Dimension (d_model)</label>
-                                        <input type="number" name="d_model" class="form-input" value="256">
-                                    </div>
-                                    <div class="form-group">
-                                        <label class="form-label">Attention Heads</label>
-                                        <input type="number" name="nhead" class="form-input" value="8">
-                                    </div>
-                                </div>
-                                <div class="form-row">
-                                    <div class="form-group">
-                                        <label class="form-label">Encoder Layers</label>
-                                        <input type="number" name="num_encoder_layers" class="form-input" value="6">
-                                    </div>
-                                    <div class="form-group">
-                                        <label class="form-label">Decoder Layers</label>
-                                        <input type="number" name="num_decoder_layers" class="form-input" value="6">
-                                    </div>
-                                </div>
-                                <div class="form-row">
-                                    <div class="form-group">
-                                        <label class="form-label">Learning Rate</label>
-                                        <input type="number" name="learning_rate" class="form-input" value="0.0001" step="0.0001">
-                                    </div>
-                                    <div class="form-group">
-                                        <label class="form-label">Batch Size</label>
-                                        <input type="number" name="batch_size" class="form-input" value="8">
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div id="legacy-config" class="tab-content">
-                                <div class="form-row">
-                                    <div class="form-group">
-                                        <label class="form-label">LSTM Units Layer 1</label>
-                                        <input type="number" name="lstm_units_1" class="form-input" value="64">
-                                    </div>
-                                    <div class="form-group">
-                                        <label class="form-label">LSTM Units Layer 2</label>
-                                        <input type="number" name="lstm_units_2" class="form-input" value="64">
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div style="margin-top: 25px;">
-                                <button type="button" class="btn" onclick="startTraining()">Start Training</button>
-                                <button type="button" class="btn btn-secondary" onclick="loadConfig()">Load Config</button>
-                                <button type="button" class="btn btn-tertiary" onclick="saveConfig()">Save Configuration</button>
-                            </div>
-                        </form>
-                    </div>
-
-                    <div class="section-card" id="trainingProgress" style="display: none;">
-                        <div class="section-header">
-                            <h2 class="section-title">Training Progress</h2>
-                            <button class="btn btn-secondary" onclick="stopTraining()">Stop Training</button>
-                        </div>
-                        <div class="progress-container">
-                            <div class="progress-bar">
-                                <div class="progress-fill" id="trainingProgressBar"></div>
-                            </div>
-                            <div class="progress-text" id="trainingProgressText">0% Complete</div>
-                        </div>
-                        <div class="training-metrics" id="trainingMetrics">
-                            <!-- Training metrics will be updated in real-time -->
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Generation Page -->
-                <div id="generation-page" class="page-content hidden">
-                    <!-- Upload Tab Content -->
+                <section id="generation-page" class="page-content hidden">
                     <div class="upload-tab">
-                      <div class="upload-hero">
-                        <h1>Generate Taiko Charts</h1>
-                        <p>Upload your audio and let AI create professional beatmaps</p>
-                      </div>
-
-                      <!-- Multi-step Upload Flow -->
-                      <div class="upload-flow">
-                        <!-- Step 1: File Upload -->
-                        <div class="upload-step active" id="step-upload">
-                          <div class="step-header">
-                            <div class="step-number">1</div>
-                            <div class="step-info">
-                              <h3>Upload Audio</h3>
-                              <p>Drag & drop or click to select your music file</p>
-                            </div>
-                          </div>
-
-                          <div class="upload-zone" id="upload-zone">
-                            <div class="upload-content">
-                              <div class="upload-icon">🎵</div>
-                              <p class="upload-text">Drag your audio file here</p>
-                              <p class="upload-subtext">or click to browse</p>
-                              <input type="file" id="audio-input" accept=".mp3,.wav,.ogg,.flac,.m4a,.aac">
-                            </div>
-                            <div class="upload-progress" id="upload-progress" style="display: none;">
-                              <div class="progress-circle">
-                                <svg class="progress-ring" width="60" height="60">
-                                  <circle class="progress-ring-circle" cx="30" cy="30" r="25"></circle>
-                                </svg>
-                                <span class="progress-percentage">0%</span>
-                              </div>
-                              <p>Processing audio features...</p>
-                            </div>
-                          </div>
-
-                          <div class="file-info" id="file-info" style="display: none;">
-                            <div class="info-grid">
-                              <div class="info-item">
-                                <label>Title</label>
-                                <span id="detected-title">-</span>
-                              </div>
-                              <div class="info-item">
-                                <label>Duration</label>
-                                <span id="detected-duration">-</span>
-                              </div>
-                              <div class="info-item">
-                                <label>BPM</label>
-                                <span id="detected-bpm">-</span>
-                              </div>
-                              <div class="info-item">
-                                <label>Features</label>
-                                <span id="features-status">-</span>
-                              </div>
-                            </div>
-                          </div>
+                        <div class="upload-hero">
+                            <h2>Audio to Taiko</h2>
+                            <p>Upload a track, choose a difficulty, and generate an osu!taiko chart with SoftChart v1.7.</p>
                         </div>
 
-                        <!-- Step 2: Chart Configuration -->
-                        <div class="upload-step" id="step-configure">
-                          <div class="step-header">
-                            <div class="step-number">2</div>
-                            <div class="step-info">
-                              <h3>Configure Chart</h3>
-                              <p>Customize your beatmap settings</p>
-                            </div>
-                          </div>
-
-                          <div class="config-grid">
-                            <div class="config-group">
-                              <label for="chart-title">Title</label>
-                              <input type="text" id="chart-title" class="input-primary" placeholder="Song Title">
-                            </div>
-
-                            <div class="config-group">
-                              <label for="chart-artist">Artist</label>
-                              <input type="text" id="chart-artist" class="input-primary" placeholder="Artist Name">
-                            </div>
-
-                            <div class="config-group">
-                              <label for="chart-bpm">BPM</label>
-                              <input type="number" id="chart-bpm" class="input-primary" min="60" max="300" placeholder="120">
-                            </div>
-
-                            <div class="config-group">
-                              <label for="chart-difficulty">Difficulty</label>
-                              <div class="difficulty-selector">
-                                <button class="difficulty-btn" data-difficulty="kantan">
-                                  <div class="difficulty-color kantan"></div>
-                                  <span>Kantan</span>
-                                </button>
-                                <button class="difficulty-btn" data-difficulty="futsuu">
-                                  <div class="difficulty-color futsuu"></div>
-                                  <span>Futsuu</span>
-                                </button>
-                                <button class="difficulty-btn" data-difficulty="muzukashii">
-                                  <div class="difficulty-color muzukashii"></div>
-                                  <span>Muzukashii</span>
-                                </button>
-                                <button class="difficulty-btn selected" data-difficulty="oni">
-                                  <div class="difficulty-color oni"></div>
-                                  <span>Oni</span>
-                                </button>
-                                <button class="difficulty-btn" data-difficulty="ura">
-                                  <div class="difficulty-color ura"></div>
-                                  <span>Ura Oni</span>
-                                </button>
-                              </div>
-                            </div>
-
-                            <div class="config-group advanced-options" style="display: none;">
-                              <label>Advanced Options</label>
-                              <div class="advanced-grid">
-                                <div class="toggle-group">
-                                  <label class="toggle">
-                                    <input type="checkbox" id="deterministic-mode" checked>
-                                    <span class="toggle-slider"></span>
-                                    <span class="toggle-label">Deterministic Mode</span>
-                                  </label>
-                                  <small>Generates identical charts each time (seed=42)</small>
-                                </div>
-
-                                <div class="slider-group" id="temperature-group" style="display: none;">
-                                  <label for="temperature-slider">Creativity Level</label>
-                                  <input type="range" id="temperature-slider" min="0.1" max="2.0" step="0.1" value="1.0" class="slider">
-                                  <span class="slider-value">1.0</span>
-                                </div>
-                              </div>
-                            </div>
-
-                            <button class="btn-ghost btn-sm" id="toggle-advanced">
-                              <i class="icon-settings"></i>Advanced Options
-                            </button>
-                          </div>
-                          <!-- Add checkbox to enable MediaPipe analysis -->
-                            <div class="config-group">
-                                <label class="toggle">
-                                    <input type="checkbox" id="use-mediapipe" checked>
-                                    <span class="toggle-slider"></span>
-                                    <span class="toggle-label">Enhanced Audio Analysis (MediaPipe)</span>
-                                </label>
-                                <small>Uses AI to detect instruments and percussion for better chart generation</small>
-                            </div>
-
-                            <!-- Progress indicator for audio analysis -->
-                            <div id="audio-analysis-progress" style="display: none;">
-                                <p>Analyzing audio with MediaPipe...</p>
-                                <div class="progress-bar">
-                                    <div class="progress-fill" id="mediapipe-progress"></div>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Step 3: Generation -->
-                        <div class="upload-step" id="step-generate">
-                          <div class="step-header">
-                            <div class="step-number">3</div>
-                            <div class="step-info">
-                              <h3>Generate Chart</h3>
-                              <p>AI is creating your beatmap</p>
-                            </div>
-                          </div>
-
-                          <div class="generation-status">
-                            <div class="generation-visual">
-                              <div class="taiko-drum">
-                                <div class="drum-surface">
-                                  <div class="hit-indicator" id="hit-don"></div>
-                                  <div class="hit-indicator" id="hit-ka"></div>
-                                </div>
-                              </div>
-                              <div class="generation-waves"></div>
-                            </div>
-
-                            <div class="generation-progress">
-                              <div class="progress-bar-animated">
-                                <div class="progress-fill" id="generation-progress"></div>
-                              </div>
-                              <p class="generation-text" id="generation-text">Initializing...</p>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-
-                      <!-- Action Buttons -->
-                      <div class="upload-actions">
-                        <button class="btn-secondary" id="btn-back" style="display: none;">Back</button>
-                        <button class="btn-primary" id="btn-next">Continue</button>
-                        <button class="btn-primary" id="btn-generate" style="display: none;">Generate Chart</button>
-                      </div>
-                    </div>
-                </div>
-
-                <!-- Library Page -->
-                <div id="library-page" class="page-content hidden">
-                    <!-- Charts Tab Content -->
-                    <div class="charts-tab">
-                      <div class="charts-header">
-                        <div class="charts-title">
-                          <h1>Generated Charts</h1>
-                          <div class="charts-stats">
-                            <span class="stat-item">
-                              <strong id="total-charts">0</strong> charts generated
-                            </span>
-                            <span class="stat-item">
-                              <strong id="avg-rating">0.0</strong> avg rating
-                            </span>
-                          </div>
-                        </div>
-                        
-                        <div class="charts-controls">
-                          <div class="search-box">
-                            <input type="text" placeholder="Search charts..." id="chart-search">
-                            <i class="icon-search"></i>
-                          </div>
-
-                          <div class="filter-dropdown">
-                            <button class="btn-secondary dropdown-trigger">
-                              <i class="icon-filter"></i>Filter
-                            </button>
-                            <div class="dropdown-menu">
-                              <label class="filter-option">
-                                <input type="checkbox" value="kantan"> Kantan
-                              </label>
-                              <label class="filter-option">
-                                <input type="checkbox" value="futsuu"> Futsuu
-                              </label>
-                              <label class="filter-option">
-                                <input type="checkbox" value="muzukashii"> Muzukashii
-                              </label>
-                              <label class="filter-option">
-                                <input type="checkbox" value="oni"> Oni
-                              </label>
-                              <label class="filter-option">
-                                <input type="checkbox" value="ura"> Ura Oni
-                              </label>
-                            </div>
-                          </div>
-
-                          <div class="sort-dropdown">
-                            <button class="btn-secondary dropdown-trigger">
-                              <i class="icon-sort"></i>Recent
-                            </button>
-                            <div class="dropdown-menu">
-                              <button class="sort-option active" data-sort="recent">Most Recent</button>
-                              <button class="sort-option" data-sort="rating">Highest Rated</button>
-                              <button class="sort-option" data-sort="title">Title A-Z</button>
-                              <button class="sort-option" data-sort="difficulty">Difficulty</button>
-                            </div>
-                          </div>
-
-                          <div class="view-toggle">
-                            <button class="view-btn active" data-view="grid">
-                              <i class="icon-grid"></i>
-                            </button>
-                            <button class="view-btn" data-view="list">
-                              <i class="icon-list"></i>
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-
-                      <!-- Charts Grid -->
-                      <div class="charts-grid" id="charts-grid">
-                        <!-- Chart cards inserted dynamically -->
-                      </div>
-
-                      <!-- Empty State -->
-                      <div class="empty-state" id="charts-empty" style="display: none;">
-                        <div class="empty-icon">🎵</div>
-                        <h3>No charts yet</h3>
-                        <p>Upload some audio files to generate your first beatmaps!</p>
-                        <button class="btn-primary" onclick="switchTab('upload')">
-                          <i class="icon-upload"></i>Upload Audio
-                        </button>
-                      </div>
-                    </div>
-                </div>
-
-                <!-- Evaluation Page -->
-                <div id="evaluation-page" class="page-content hidden">
-                    <div class="section-card">
-                        <div class="section-header">
-                            <h2 class="section-title">Human Evaluation System</h2>
-                            <button class="btn" onclick="startEvaluation()">Start Evaluation Session</button>
-                            <button class="btn btn-secondary" onclick="startComparativeEvaluation()">Start Comparative Evaluation</button>
-                        </div>
-                        
-                        <form id="evaluationForm" style="display: none;">
-                            <div class="evaluation-form">
-                                <h3 id="evaluationChartTitle">Loading chart...</h3>
-                                
-                                <div class="form-group">
-                                    <label class="form-label">Fun Factor</label>
-                                    <input type="range" name="fun" class="rating-slider" min="1" max="10" value="5">
-                                    <div class="slider-labels">
-                                        <span>Boring</span>
-                                        <span>Amazing</span>
+                        <div class="upload-flow">
+                            <div class="upload-step active" id="step-upload">
+                                <div class="step-header">
+                                    <div class="step-number">1</div>
+                                    <div class="step-info">
+                                        <h3>Upload audio</h3>
+                                        <p>MP3, WAV, OGG, FLAC, M4A, or AAC up to 100 MB.</p>
                                     </div>
                                 </div>
-                                
+
+                                <div class="upload-zone" id="upload-zone">
+                                    <div class="upload-content">
+                                        <div class="upload-icon" aria-hidden="true">
+                                            <svg viewBox="0 0 24 24"><path d="M9 18V5l10-2v13M9 9l10-2"></path><circle cx="6" cy="18" r="3"></circle><circle cx="16" cy="16" r="3"></circle></svg>
+                                        </div>
+                                        <p class="upload-text">Drop audio here</p>
+                                        <p class="upload-subtext">or click to choose a file</p>
+                                        <input type="file" id="audio-input" accept=".mp3,.wav,.ogg,.flac,.m4a,.aac">
+                                    </div>
+                                    <div class="upload-progress" id="upload-progress" style="display:none;">
+                                        <p>Inspecting audio…</p>
+                                    </div>
+                                </div>
+
+                            </div>
+
+                            <div class="upload-step" id="step-configure">
+                                <div class="step-header">
+                                    <div class="step-number">2</div>
+                                    <div class="step-info">
+                                        <h3>Chart settings</h3>
+                                        <p>Leave BPM blank to let the generator fit its own timing grid.</p>
+                                    </div>
+                                </div>
+
+                                <div class="file-info" id="file-info">
+                                    <div class="info-grid">
+                                        <div class="info-item"><label>File title</label><span id="detected-title">—</span></div>
+                                        <div class="info-item"><label>Duration</label><span id="detected-duration">—</span></div>
+                                        <div class="info-item"><label>Detected BPM</label><span id="detected-bpm">—</span></div>
+                                        <div class="info-item"><label>Status</label><span id="features-status">—</span></div>
+                                    </div>
+                                </div>
+
+                                <div class="config-grid">
+                                    <div class="config-group">
+                                        <label for="chart-title">Title</label>
+                                        <input type="text" id="chart-title" class="input-primary" placeholder="Song title">
+                                    </div>
+                                    <div class="config-group">
+                                        <label for="chart-artist">Artist</label>
+                                        <input type="text" id="chart-artist" class="input-primary" placeholder="Artist">
+                                    </div>
+                                    <div class="config-group">
+                                        <label for="chart-bpm">BPM override</label>
+                                        <input type="number" id="chart-bpm" class="input-primary" min="40" max="320" step="0.1" placeholder="Auto">
+                                    </div>
+                                    <div class="config-group">
+                                        <label>Difficulty</label>
+                                        <div class="difficulty-selector" role="group" aria-label="Chart difficulty">
+                                            <button type="button" class="difficulty-btn" data-difficulty="kantan"><span class="difficulty-color kantan"></span><span>Kantan</span></button>
+                                            <button type="button" class="difficulty-btn" data-difficulty="futsuu"><span class="difficulty-color futsuu"></span><span>Futsuu</span></button>
+                                            <button type="button" class="difficulty-btn" data-difficulty="muzukashii"><span class="difficulty-color muzukashii"></span><span>Muzukashii</span></button>
+                                            <button type="button" class="difficulty-btn selected" data-difficulty="oni"><span class="difficulty-color oni"></span><span>Oni</span></button>
+                                            <button type="button" class="difficulty-btn" data-difficulty="ura"><span class="difficulty-color ura"></span><span>Ura Oni</span></button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="upload-actions">
+                                    <button class="btn" id="btn-generate" type="button">Generate chart</button>
+                                    <button class="btn btn-tertiary" id="btn-change-audio" type="button">Choose another file</button>
+                                </div>
+                            </div>
+
+                            <div class="upload-step" id="step-generate">
+                                <div class="step-header">
+                                    <div class="step-number">3</div>
+                                    <div class="step-info">
+                                        <h3>Generating</h3>
+                                        <p id="generation-text">Starting…</p>
+                                    </div>
+                                </div>
+                                <div class="generation-status">
+                                    <div class="progress-bar-animated">
+                                        <div class="progress-fill" id="generation-progress"></div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <section id="library-page" class="page-content hidden">
+                    <div class="charts-tab">
+                        <div class="charts-header">
+                            <div class="charts-title">
+                                <h1>Generated charts</h1>
+                                <div class="charts-stats">
+                                    <span class="stat-item"><strong id="total-charts">0</strong> charts</span>
+                                    <span class="stat-item"><strong id="avg-rating">—</strong> avg rating</span>
+                                </div>
+                            </div>
+
+                            <div class="charts-controls">
+                                <div class="search-box">
+                                    <input type="search" placeholder="Search charts…" id="chart-search">
+                                </div>
+                                <select id="chart-difficulty-filter" class="form-select" aria-label="Filter by difficulty">
+                                    <option value="">All difficulties</option>
+                                    <option value="kantan">Kantan</option>
+                                    <option value="futsuu">Futsuu</option>
+                                    <option value="muzukashii">Muzukashii</option>
+                                    <option value="oni">Oni</option>
+                                    <option value="ura">Ura Oni</option>
+                                </select>
+                                <select id="chart-sort" class="form-select" aria-label="Sort charts">
+                                    <option value="recent">Most recent</option>
+                                    <option value="rating">Highest rated</option>
+                                    <option value="title">Title A–Z</option>
+                                    <option value="difficulty">Difficulty</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <div class="charts-grid" id="charts-grid"></div>
+
+                        <template id="chart-card-template">
+                            <article class="chart-card">
+                                <div class="chart-preview"><div class="chart-waveform" aria-label="Note density preview"></div></div>
+                                <div class="chart-info">
+                                    <div class="chart-title"></div>
+                                    <div class="chart-artist"></div>
+                                    <div class="chart-meta"><span class="chart-bpm"></span><span class="chart-created"></span></div>
+                                    <div class="chart-meta">
+                                        <span><span class="difficulty-color"></span><span class="difficulty-text"></span></span>
+                                        <span class="chart-rating"></span>
+                                    </div>
+                                    <div class="chart-actions">
+                                        <button type="button" class="btn-secondary preview-btn">Preview / Edit</button>
+                                        <button type="button" class="btn-secondary download-btn">Download .osz</button>
+                                        <button type="button" class="btn-secondary download-osu-btn">Raw .osu</button>
+                                        <button type="button" class="btn-secondary rate-btn">Rate</button>
+                                    </div>
+                                </div>
+                            </article>
+                        </template>
+
+                        <div class="empty-state" id="charts-empty" style="display:none;">
+                            <h3>No generated charts yet</h3>
+                            <p>Generate a chart and it will appear here.</p>
+                            <button class="btn-primary" type="button" data-go="generation">Generate chart</button>
+                        </div>
+                    </div>
+                </section>
+
+                <section id="evaluation-page" class="page-content hidden">
+                    <div class="section-card">
+                        <div class="section-header">
+                            <div>
+                                <h2 class="section-title">Evaluate generated charts</h2>
+                                <p class="section-copy">Ratings are saved to the local Rhythm Tatsujin database and update the chart's average score.</p>
+                            </div>
+                            <button class="btn" id="start-evaluation" type="button">Load unrated chart</button>
+                        </div>
+
+                        <form id="evaluationForm" style="display:none;">
+                            <div class="evaluation-form">
+                                <h3 id="evaluationChartTitle">Loading chart…</h3>
+
+                                <div class="form-group">
+                                    <label class="form-label">Fun</label>
+                                    <input type="range" name="fun" class="rating-slider" min="1" max="10" value="5">
+                                </div>
                                 <div class="form-group">
                                     <label class="form-label">Musicality</label>
                                     <input type="range" name="musicality" class="rating-slider" min="1" max="10" value="5">
-                                    <div class="slider-labels">
-                                        <span>Off-beat</span>
-                                        <span>Perfect sync</span>
-                                    </div>
                                 </div>
-                                
                                 <div class="form-group">
                                     <label class="form-label">Playability</label>
                                     <input type="range" name="playability" class="rating-slider" min="1" max="10" value="5">
-                                    <div class="slider-labels">
-                                        <span>Awkward</span>
-                                        <span>Smooth flow</span>
-                                    </div>
                                 </div>
-                                
                                 <div class="form-group">
-                                    <label class="form-label">Pattern Coherence</label>
+                                    <label class="form-label">Pattern coherence</label>
                                     <input type="range" name="coherence" class="rating-slider" min="1" max="10" value="5">
-                                    <div class="slider-labels">
-                                        <span>Random</span>
-                                        <span>Logical</span>
-                                    </div>
                                 </div>
-                                
                                 <div class="form-group">
-                                    <label class="form-label">Additional Comments</label>
-                                    <textarea name="comments" class="form-input" rows="3" placeholder="Share your detailed feedback..."></textarea>
+                                    <label class="form-label" for="evaluation-comments">Comments</label>
+                                    <textarea id="evaluation-comments" name="comments" class="form-input" rows="3" placeholder="Optional notes"></textarea>
                                 </div>
-                                
-                                <div style="margin-top: 20px;">
-                                    <button type="button" class="btn" onclick="submitEvaluation()">Submit Rating</button>
-                                    <button type="button" class="btn btn-secondary" onclick="skipEvaluation()">Skip This Chart</button>
+
+                                <div class="form-row">
+                                    <button type="button" class="btn" id="submit-evaluation">Save evaluation</button>
+                                    <button type="button" class="btn btn-secondary" id="skip-evaluation">Skip</button>
+                                    <button type="button" class="btn btn-tertiary" id="edit-evaluation-chart">Open editor</button>
                                 </div>
                             </div>
                         </form>
-
-                        <div id="comparativeEvaluation" style="display: none;">
-                            <h3>Which chart is better?</h3>
-                            <div class="comparative-grid">
-                                <div class="chart-comparison-card" id="chartA"></div>
-                                <div class="chart-comparison-card" id="chartB"></div>
-                            </div>
-                            <div class="comparison-actions">
-                                <button class="btn" onclick="submitComparativeEvaluation('A')">Chart A is better</button>
-                                <button class="btn" onclick="submitComparativeEvaluation('B')">Chart B is better</button>
-                                <button class="btn btn-secondary" onclick="submitComparativeEvaluation('tie')">They are about the same</button>
-                            </div>
-                        </div>
                     </div>
-                </div>
+                </section>
 
-                <!-- Configuration Page -->
-                <div id="config-page" class="page-content hidden">
+                <section id="training-page" class="page-content hidden">
                     <div class="section-card">
                         <div class="section-header">
-                            <h2 class="section-title">System Configuration</h2>
+                            <div>
+                                <h2 class="section-title">Research Transformer</h2>
+                                <p class="section-copy">This trains the local experimental Transformer on the bundled 100-map research corpus. It is not the production SoftChart generator.</p>
+                            </div>
                         </div>
-                        <form id="configForm">
+
+                        <form id="trainingForm">
                             <div class="form-row">
                                 <div class="form-group">
-                                    <label class="form-label">Audio Feature Size</label>
-                                    <input type="number" name="audio_feature_size" class="form-input" value="80">
+                                    <label class="form-label" for="d-model">Model dimension</label>
+                                    <input id="d-model" type="number" name="d_model" class="form-input" value="256" min="16">
                                 </div>
                                 <div class="form-group">
-                                    <label class="form-label">Time Quantization (ms)</label>
-                                    <input type="number" name="time_quantization_ms" class="form-input" value="100">
+                                    <label class="form-label" for="nhead">Attention heads</label>
+                                    <input id="nhead" type="number" name="nhead" class="form-input" value="8" min="1">
                                 </div>
                             </div>
                             <div class="form-row">
                                 <div class="form-group">
-                                    <label class="form-label">Source Resolution (ms)</label>
-                                    <input type="number" name="source_resolution_ms" class="form-input" value="23.2" step="0.1">
+                                    <label class="form-label" for="encoder-layers">Encoder layers</label>
+                                    <input id="encoder-layers" type="number" name="num_encoder_layers" class="form-input" value="6" min="1">
                                 </div>
                                 <div class="form-group">
-                                    <label class="form-label">Max Sequence Length</label>
-                                    <input type="number" name="max_sequence_length" class="form-input" value="512">
+                                    <label class="form-label" for="decoder-layers">Decoder layers</label>
+                                    <input id="decoder-layers" type="number" name="num_decoder_layers" class="form-input" value="6" min="1">
                                 </div>
                             </div>
-                            <div style="margin-top: 25px;">
-                                <button type="button" class="btn" onclick="saveSystemConfig()">Save Configuration</button>
-                                <button type="button" class="btn btn-secondary" onclick="loadSystemConfig()">Load Configuration</button>
-                                <button type="button" class="btn btn-tertiary" onclick="resetToDefaults()">Reset to Defaults</button>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label class="form-label" for="learning-rate">Learning rate</label>
+                                    <input id="learning-rate" type="number" name="learning_rate" class="form-input" value="0.0001" step="0.00001" min="0">
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label" for="batch-size">Batch size</label>
+                                    <input id="batch-size" type="number" name="batch_size" class="form-input" value="4" min="1">
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <button type="button" class="btn" id="start-training">Start training</button>
+                                <button type="button" class="btn btn-secondary" id="load-training-config">Reload saved config</button>
+                                <button type="button" class="btn btn-tertiary" id="save-training-config">Save these settings</button>
                             </div>
                         </form>
                     </div>
-                </div>
 
-                <!-- Research Page -->
-                <div id="research-page" class="page-content hidden">
+                    <div class="section-card" id="trainingProgress" style="display:none;">
+                        <div class="section-header">
+                            <h2 class="section-title">Training progress</h2>
+                            <button class="btn btn-secondary" id="stop-training" type="button">Stop training</button>
+                        </div>
+                        <div class="progress-container">
+                            <div class="progress-bar"><div class="progress-fill" id="trainingProgressBar"></div></div>
+                            <div class="progress-text" id="trainingProgressText">0% complete</div>
+                        </div>
+                        <div class="training-metrics" id="trainingMetrics"></div>
+                    </div>
+                </section>
+
+                <section id="research-page" class="page-content hidden">
                     <div class="section-card">
                         <div class="section-header">
-                            <h2 class="section-title">Research Dashboard</h2>
-                            <button class="btn" onclick="exportResearchDataset()">Export Dataset</button>
+                            <div>
+                                <h2 class="section-title">Research evidence</h2>
+                                <p class="section-copy">Persisted experiment metadata, chart history, and human evaluations only.</p>
+                            </div>
+                            <button class="btn btn-secondary" id="export-research" type="button">Export dataset</button>
                         </div>
                         <div class="research-grid">
-                            <div class="research-item">
-                                <h3>Experiment History</h3>
-                                <div id="experimentHistory"></div>
-                            </div>
-                            <div class="research-item">
-                                <h3>Model Comparisons</h3>
-                                <div id="modelComparisons"></div>
-                            </div>
-                            <div class="research-item">
-                                <h3>Pattern Evolution</h3>
-                                <div id="patternEvolution"></div>
-                            </div>
-                            <div class="research-item">
-                                <h3>Human Feedback Stats</h3>
-                                <div id="humanFeedbackStats"></div>
-                            </div>
+                            <div class="research-item"><h3>Experiment history</h3><div id="experimentHistory"></div></div>
+                            <div class="research-item"><h3>Training runs</h3><div id="trainingRuns"></div></div>
+                            <div class="research-item"><h3>Chart history</h3><div id="chartHistory"></div></div>
+                            <div class="research-item"><h3>Human feedback</h3><div id="humanFeedbackStats"></div></div>
                         </div>
                     </div>
-                </div>
+                </section>
             </main>
         </div>
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-audio/audio_bundle.js" crossorigin="anonymous"></script>
     <script src="static/js/app.js" defer></script>
-    <div id="training-metrics-dashboard" style="display: none;">
-        <div class="metrics-grid">
-            <div class="metric-card">
-                <h3>Training Loss</h3>
-                <canvas id="loss-chart"></canvas>
-            </div>
-            <div class="metric-card">
-                <h3>Validation Accuracy</h3>
-                <canvas id="accuracy-chart"></canvas>
-            </div>
-            <div class="metric-card">
-                <h3>Learning Rate</h3>
-                <canvas id="lr-chart"></canvas>
-            </div>
-            <div class="metric-card">
-                <h3>GPU Memory Usage</h3>
-                <canvas id="memory-chart"></canvas>
-            </div>
-        </div>
-    </div>
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-    <script>
-        // Initialize charts
-        const chartConfig = {
-            type: 'line',
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                animation: { duration: 300 },
-                interaction: { intersect: false, mode: 'index' },
-                plugins: {
-                    legend: { display: true, position: 'top' }
-                },
-                scales: {
-                    x: { display: true, title: { display: true, text: 'Epoch' } },
-                    y: { display: true, beginAtZero: false }
-                }
-            }
-        };
-
-        const lossChart = new Chart(
-            document.getElementById('loss-chart'),
-            {
-                ...chartConfig,
-                data: {
-                    labels: [],
-                    datasets: [{
-                        label: 'Training Loss',
-                        data: [],
-                        borderColor: 'rgb(255, 99, 132)',
-                        backgroundColor: 'rgba(255, 99, 132, 0.1)',
-                    }]
-                }
-            }
-        );
-
-        const accuracyChart = new Chart(
-            document.getElementById('accuracy-chart'),
-            {
-                ...chartConfig,
-                data: {
-                    labels: [],
-                    datasets: [{
-                        label: 'Validation Accuracy',
-                        data: [],
-                        borderColor: 'rgb(75, 192, 192)',
-                        backgroundColor: 'rgba(75, 192, 192, 0.1)',
-                    }]
-                }
-            }
-        );
-
-        // Socket handler for training metrics
-        socket.on('training_metrics', function(data) {
-            document.getElementById('training-metrics-dashboard').style.display = 'block';
-
-            // Update loss chart
-            lossChart.data.labels.push(data.epoch);
-            lossChart.data.datasets[0].data.push(data.loss);
-            lossChart.update();
-
-            // Update accuracy chart
-            if (data.accuracy !== undefined) {
-                accuracyChart.data.labels.push(data.epoch);
-                accuracyChart.data.datasets[0].data.push(data.accuracy);
-                accuracyChart.update();
-            }
-        });
-
-        socket.on('task_update', function(task) {
-            updateTaskStatus(task.id, task);
-
-            if (task.type === 'process_uploaded_audio') {
-                updateAudioProcessingUI(task);
-            } else if (task.type === 'start_chart_generation') {
-                updateGenerationProgressUI(task);
-            }
-        });
-
-        function updateAudioProcessingUI(task) {
-            const statusElement = document.getElementById(`upload-status-${task.id}`);
-            if (!statusElement) return;
-
-            statusElement.innerHTML = `
-                <div class="progress-container">
-                    <div class="progress-bar" style="width: ${task.progress}%"></div>
-                </div>
-                <p class="status-message">${task.message}</p>
-            `;
-
-            if (task.status === 'completed') {
-                statusElement.classList.add('success');
-                // Enable chart generation button
-                document.getElementById('generate-chart-btn').disabled = false;
-            } else if (task.status === 'failed') {
-                statusElement.classList.add('error');
-                statusElement.innerHTML += `<p class="error-message">${task.error}</p>`;
-            }
-        }
-    </script>
 </body>
 </html>

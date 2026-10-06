@@ -11,15 +11,22 @@ model:
   dim_feedforward: 1024
   dropout: 0.1
   audio_feature_size: 80 # Corresponds to the 80 bands in the spectrogram
+  use_gradient_checkpointing: true
   # Vocab size, num_genres, and num_difficulties are determined at runtime from the dataset
 
 data:
   max_sequence_length: 512
-  time_quantization_ms: 100 # Each token represents a 100ms chunk of time
-  source_resolution_ms: 23.2 # The resolution of the input spectrogram features
+  # Preserve much more of the original ~23ms rhythmic/onset signal while
+  # keeping 512-token attention practical on an 8GB GPU.
+  time_quantization_ms: 46.4
+  source_resolution_ms: 23.2
+  # Training overlaps windows so motifs across boundaries are not discarded;
+  # validation stays non-overlapping for a less redundant metric.
+  window_stride: 256
+  validation_window_stride: 512
 
 training:
-  batch_size: 8
+  batch_size: 4
   effective_batch_size: 32
   learning_rate: 0.0001
   num_epochs: 100

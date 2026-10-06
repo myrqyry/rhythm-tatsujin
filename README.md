@@ -1,132 +1,179 @@
 # rhythm-tatsujin
 
-_A cutting-edge AI system for human-like Taiko no Tatsujin beatmap generation — now with a full-featured web interface, modern transformer architecture, and integrated human evaluation._
+Audio-to-chart generation for osu!taiko, plus a retrainable TaikoNation research lane.
 
-## Overview
+This repository started from Emily Halina and Matthew Guzdial's TaikoNation work and now has two deliberately separate paths:
 
-rhythm-tatsujin is the modern successor to the influential research of ["TaikoNation: Patterning-focused Chart Generation for Rhythm Action Games"](https://arxiv.org/abs/2107.12506) by Emily Halina and Matthew Guzdial, and originally forked from the original ["GitHub repository"](https://github.com/emily-halina/TaikoNationV1). This project extends the original system with advanced transformer models, pattern-aware memory, multi-difficulty control, and a production-ready web/UI layer for both experimentation and real-world use.
+1. **Use it:** upload or pass a normal audio file and generate a Taiko chart with a pretrained, Taiko-specific model.
+2. **Research it:** train the repository's PyTorch transformer on the bundled TaikoNation paired feature/chart corpus.
 
-***
+The old TensorFlow/tflearn checkpoints under model/ are retained as historical artifacts. They are not part of the current runtime.
 
-## Key Features
+## What works now
 
-- **Multi-difficulty chart generation:** Fully supports Easy, Normal, Hard, Oni, and Ura Oni levels
-- **Pattern-aware intelligence:** Pattern memory and sliding window loss produce musically natural, human-like chart patterns
-- **Modern deep learning architecture:** Transformer with attention, positional encoding, difficulty conditioning, and multi-task heads
-- **Integrated web interface:** Accessible dashboard, drag-and-drop audio/chart upload, real-time progress display, and human-in-the-loop chart feedback system
-- **Data pipeline for RLHF:** Collect and use human preferences to further improve models
-- **Export formats:** Generate .osu and .tja files, compatible with osu!taiko and simulators
-- **RESTful API & batch CLI:** For seamless automation and platform integration
+- Raw WAV/MP3/FLAC/OGG/M4A/AAC upload in the web UI; runtime uploads stay under ignored `output/uploads/` and never mix into the training corpus.
+- Pretrained audio-to-Taiko generation using the pinned SoftChart v1.7 release used by the validated upstream Space.
+- Automatic CUDA use when available; CPU fallback is supported.
+- GPU-aware mixed precision: Ampere+ can use BF16, older CUDA GPUs use FP16.
+- Easy, Normal, Hard, Oni, and Ura conditioning.
+- Beat/grid fitting with an optional manual BPM override.
+- osu!taiko .osu export with normal/big Don/Ka plus rolls and balloons/spinners.
+- Persistent generated-chart metadata and task state in SQLite.
+- Live generation/training progress over Socket.IO.
+- Ready-to-import `.osz` downloads bundle the generated `.osu` with its exact source audio; raw `.osu` remains available separately.
+- Edit, rate, and multi-criteria evaluation endpoints.
+- Retrainable PyTorch transformer using the 100 paired TaikoNation samples in input_songs/ and input_charts_nr/.
+- Finer 46.4ms research tokens instead of the old 100ms buckets, preserving much more onset/rhythm detail from the original ~23ms arrays.
+- Full-song overlapping training windows, training-fold-only 80-band normalization, padding-aware attention, and checkpointed preprocessing metadata for matching inference.
+- Unlabeled curated TaikoNation maps are treated as expert/Oni material rather than assigned synthetic difficulty labels from density.
+- A fast smoke-training mode for proving the research pipeline before committing to a long run.
 
-***
+## Install
 
-## Live Demo & Gallery
+uv is the canonical environment manager.
 
-- Try the web interface locally: Open http://localhost:5000 after setup
-- Evaluate and rate charts in-browser, and see pattern visualizations (see screenshots and videos in `/web/README`)
-
-***
-
-## Installation
-
-### Prerequisites
-
-- Python 3.10+
-- PyTorch 1.12+
-- NumPy, SciPy, librosa, FastAPI
-- (Optional: ffmpeg, TensorFlow, CUDA for max speed)
-
-### Project Setup
-
-```bash
+~~~bash
 git clone https://github.com/myrqyry/rhythm-tatsujin.git
 cd rhythm-tatsujin
-pip install -r requirements.txt
-# Optionally: pip install -r web/requirements.txt  # for web interface
-```
+uv sync --group dev
+~~~
 
-***
+The first pretrained generation downloads the model weights from Hugging Face and caches them locally.
 
-## Usage
+## Generate from audio
 
-### 1. Web Interface
+~~~bash
+uv run taikonation-generate song.mp3 output/song-oni.osu --difficulty oni
+~~~
 
-```bash
-cd web
-uvicorn server_fastapi:socket_app --host 127.0.0.1 --port 5000 --reload
-# Visit http://localhost:5000 to access the dashboard
-```
+Optional flags include:
 
-- Upload audio for chart generation, set difficulty/style, view progress, and export charts
-- Train models and monitor status live in the browser
-- Rate and comment on generated charts to provide feedback for RLHF
+~~~text
+--difficulty easy|normal|hard|oni|ura
+--level 1..10
+--bpm 174            # trusted manual override; omit for automatic timing
+--title "Song title"
+--artist "Artist"
+--sample             # sampled decoding instead of deterministic greedy decoding
+~~~
 
-### 2. CLI
+By default generation uses JacobLinCool/softchart-v17, the default model in the pinned upstream Space revision. The inference source used by this repository is vendored from the public SoftChart Hugging Face Space at a pinned revision; provenance and the upstream MIT license are in third_party/softchart/.
 
-- **Train a model:**
-  ```bash
-  python -m taikonation.training.trainer --config config/default.yaml
-  ```
-- **Generate a chart:**
-  ```bash
-  python -m taikonation.generation.generator model.pth input_songs/song.npy output_chart.osu --difficulty oni --bpm 174 --offset-ms 1200 --hitsound-volume 75
-  ```
-- **Batch processing:** See CLI docs and scripts.
+## Web studio
 
-***
+~~~bash
+uv run taikonation-serve
+~~~
 
-## Configuration
+Open http://127.0.0.1:5000.
 
-- All hyperparameters are in YAML files (see `config/`). Example:
-  ```yaml
-  model:
-    d_model: 256
-    nhead: 8
-    num_encoder_layers: 6
-    num_decoder_layers: 6
-  ```
-- Change batch size, pattern memory, or audio settings as needed.
+The generation flow is:
 
-***
+~~~text
+audio upload
+  -> audio inspection
+  -> SoftChart log-mel preprocessing
+  -> beat/grid fit
+  -> constrained Taiko decoding
+  -> osu!taiko export
+  -> persisted chart/task record
+  -> download/editor/evaluation
+~~~
 
-## Data Format
+If TAIKONATION_API_TOKEN is set, protected API requests require that token.
 
-- **Input:** Numpy spectrograms (80 bands, 23.2ms frames)
-- **Chart tokens:** `[don, ka, big_don, big_ka, roll_start, roll_end, finisher]` (boolean vectors)
-- **Configurable tokenization & quantization for research
+## Research transformer
 
-***
+The bundled research data contains 100 paired examples:
 
-## Evaluation & Research
+- input_songs/: float32 arrays with 80 audio bands at roughly 23.2ms source resolution
+- input_charts_nr/: 7-channel Taiko event arrays on the same source timeline
+- event channels: Don, Ka, big Don, big Ka, roll start, roll end, finisher
 
-- **Automated:** Pattern overlap, space coverage, note type distribution, F1 timing score
-- **Human:** Fun, musicality, playability, pattern logic, difficulty accuracy (all 1–10 scale)
-- **RLHF pipeline:** Human ratings are saved for reward learning
+The default trainer groups two source frames into a 46.4ms token, uses 512-token (~23.76s) windows with 50% overlap for training, and computes per-band mean/std only from the training fold. Validation uses held-out songs with non-overlapping windows. This keeps substantially more rhythmic detail than the previous 100ms representation without increasing the Transformer's 512-token attention length.
 
+Before a long training run, prove the full path with:
 
-***
+~~~bash
+uv run taikonation-train --smoke
+~~~
 
-## Cite Us
+For the configured full experiment:
 
-If you use this system, please cite the original author:
+~~~bash
+uv run taikonation-train --config config/default.yaml
+~~~
 
-```bibtex
-@inproceedings{halina2021taikonation,
-  title={TaikoNation: Patterning-focused Chart Generation for Rhythm Action Games},
-  author={Halina, Emily and Guzdial, Matthew},
-  booktitle={Proceedings of the Twelfth Workshop on Procedural Content Generation},
-  year={2021}
-}
-```
+Best checkpoints are exported under output/ and experiment metadata/artifacts are kept under experiments/.
 
-***
+To run the repository's research model explicitly instead of the pretrained production backend:
 
-## Acknowledgments
+~~~bash
+uv run taikonation-generate-research \
+  output/taiko_transformer.pth \
+  input_songs/example.npy \
+  output/research-chart.osu \
+  --difficulty oni
+~~~
 
-Thanks to Emily Halina, Matthew Guzdial, the osu!taiko community, and all contributors. Powered by PyTorch, Hugging Face, and open-source rhythm game fans worldwide.
+The research generator fails closed when no trained checkpoint exists; it no longer silently produces a "successful" chart from random weights. It reloads the checkpoint's exact feature normalization/timing contract and walks the full song in model-sized windows while carrying the previous generated token across window boundaries.
 
-***
+## Human reference ladders
 
-*"The rhythm is just a click away."* 🥁
+Real multi-difficulty Taiko sets are especially useful for evaluating difficulty conditioning because the audio stays fixed while a human mapper changes density, subdivision complexity, and patterns.
 
-***
+Keep local `.osz` archives under an ignored directory such as `reference_osz/`, then import them with:
+
+~~~bash
+uv run taikonation-import-reference reference_osz/*.osz
+~~~
+
+The importer:
+
+- keeps only `Mode:1` osu!taiko difficulties;
+- recognizes Kantan/Easy, Futsuu/Normal, Muzukashii/Hard, Oni, and Inner Oni/Ura labels;
+- groups all difficulties by beatmap set/audio instead of pretending they are independent songs;
+- extracts the source audio and Taiko maps only into ignored `output/reference_corpus/`;
+- records note density, Don/Ka and big-note ratios, inter-onset timing, beat-subdivision complexity, and density relative to the human Oni chart;
+- writes both aggregate difficulty profiles and separate per-mapper style profiles under `output/reference_corpus/`;
+- keeps human-Taiko plausibility, requested-difficulty plausibility, and mapper-style similarity as separate evaluation concepts rather than collapsing them into one score.
+
+These references are calibration/evaluation data by default. They are not automatically mixed into the original 100-map training corpus.
+
+## Architecture
+
+- taikonation/generation/softchart_backend.py — production raw-audio inference adapter
+- taikonation/generation/osu_export.py — timestamped osu!taiko exporter
+- taikonation/vendor/softchart/ — pinned MIT-licensed upstream inference source
+- taikonation/models/transformer.py — local research transformer
+- taikonation/data/ — paired-corpus tokenization/features/dataset
+- taikonation/training/trainer.py — local training/checkpoint pipeline
+- web/server_fastapi.py — sole backend runtime
+- web/persistence.py — SQLite persistence
+- web/static/ — studio frontend
+
+tools/route_audit.py inspects the actual FastAPI routes and rejects stale Flask-era runtime imports. It does not hard-code a "migration complete" result.
+
+## Validation
+
+~~~bash
+uv run pytest -q
+uv run python tools/route_audit.py
+node --check web/static/js/app.js
+~~~
+
+For a real end-to-end proof, generate a chart from an audio file and validate/open the resulting .osu in an osu!taiko-compatible client.
+
+## Provenance
+
+TaikoNation research:
+
+Halina, Emily and Guzdial, Matthew. "TaikoNation: Patterning-focused Chart Generation for Rhythm Action Games." Proceedings of the Twelfth Workshop on Procedural Content Generation, 2021.
+
+Original repository: https://github.com/emily-halina/TaikoNationV1
+
+Pretrained production inference uses SoftChart source by JacobLinCool under the MIT license. See third_party/softchart/PROVENANCE.md.
+
+## License
+
+See LICENSE for this repository and third_party/softchart/LICENSE for the vendored SoftChart source.

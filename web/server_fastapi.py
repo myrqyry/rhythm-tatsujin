@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""TaikoNation Studio - FastAPI ASGI Server
+"""Rhythm Tatsujin - FastAPI ASGI Server
 
 This file provides a FastAPI-based server with python-socketio AsyncServer
 mounted as an ASGI app. It mirrors the main API surface from the Flask server
@@ -10,28 +10,35 @@ import io
 import json
 import zipfile
 import asyncio
+import logging
+import tempfile
 import yaml
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Any, Optional, List
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import FastAPI, HTTPException, Depends, Header, UploadFile, File, Query, Request
-from fastapi.responses import JSONResponse, FileResponse, HTMLResponse, StreamingResponse
+from fastapi.responses import JSONResponse, FileResponse, HTMLResponse, StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.background import BackgroundTask
 from pydantic import BaseModel, Field
+from starlette.datastructures import UploadFile as StarletteUploadFile
 import socketio
 from web.persistence import StudioStore
+
+logger = logging.getLogger(__name__)
 
 # Project paths
 BASE_DIR = Path(__file__).resolve().parent
 REPO_ROOT = BASE_DIR.parent
-UPLOAD_FOLDER = REPO_ROOT / 'input_songs'
 CHART_OUTPUT_FOLDER = REPO_ROOT / 'output'
+UPLOAD_FOLDER = CHART_OUTPUT_FOLDER / 'uploads'
+LEGACY_AUDIO_FOLDER = REPO_ROOT / 'input_songs'
 CONFIG_FOLDER = REPO_ROOT / 'config'
 MODEL_FOLDER = REPO_ROOT / 'model'
 
-for p in (UPLOAD_FOLDER, CHART_OUTPUT_FOLDER):
+for p in (CHART_OUTPUT_FOLDER, UPLOAD_FOLDER):
     p.mkdir(parents=True, exist_ok=True)
 
 # Config
@@ -45,31 +52,42 @@ socket_app = socketio.ASGIApp(sio, other_asgi_app=app)
 # Serve static files
 app.mount('/static', StaticFiles(directory=str(BASE_DIR / 'static')), name='static')
 
-# In-memory state (demo)
+# Compatibility caches backed by SQLite plus the runtime model catalog.
 system_logs = []
 generated_charts = []
 human_evaluations = []
 model_configurations = []
 audio_features = []
-active_models: Dict[str, Dict[str, Any]] = {}
+active_models: Dict[str, Dict[str, Any]] = {
+    "softchart-v17": {
+        "name": "SoftChart v1.7",
+        "type": "Pretrained audio-to-Taiko generator",
+        "model_id": "JacobLinCool/softchart-v17",
+        "status": "available",
+    }
+}
 store = StudioStore(CHART_OUTPUT_FOLDER / "studio.sqlite3")
 active_tasks = []
-# Global executor for real background jobs
-executor = ThreadPoolExecutor(max_workers=4)
+# One ML worker keeps GPU-heavy training/generation serialized on local hardware.
+executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="taikonation-ml")
 
 
 class UploadAudioResponse(BaseModel):
     success: bool
     filename: str
     title: str
+    duration: Optional[float] = None
+    detected_bpm: Optional[float] = None
+    ready_for_generation: bool = True
 
 
 class GenerateChartRequest(BaseModel):
     title: str = Field(default="Untitled", min_length=1, max_length=120)
     artist: str = Field(default="Unknown", min_length=1, max_length=120)
-    bpm: int = Field(default=120, ge=40, le=320)
+    audio_filename: str = Field(min_length=1, max_length=255)
+    bpm: Optional[float] = Field(default=None, ge=40, le=320)
     genre: str = Field(default="electronic", min_length=1, max_length=64)
-    difficulty: str = Field(default="oni", min_length=1, max_length=32)
+    difficulty: str = Field(default="oni", pattern="^(easy|normal|hard|oni|ura|kantan|futsuu|muzukashii)$")
     pattern_style: str = Field(default="balanced", min_length=1, max_length=64)
 
 
@@ -102,7 +120,12 @@ class StartTrainingRequest(BaseModel):
     num_encoder_layers: int = 6
     num_decoder_layers: int = 6
     learning_rate: float = 0.0001
-    batch_size: int = 8
+    batch_size: int = 4
+
+
+class SubmitRatingRequest(BaseModel):
+    chart_id: int
+    rating: int = Field(ge=1, le=5)
 
 
 class SubmitEvaluationRequest(BaseModel):
@@ -114,14 +137,9 @@ class SubmitEvaluationRequest(BaseModel):
     comments: str = ''
 
 
-class SubmitComparativeEvaluationRequest(BaseModel):
-    chartA_id: int
-    chartB_id: int
-    preference: str
-
-
 def _load_persisted_state():
-    """Load persisted entities for compatibility with existing callers/tests."""
+    """Load persisted state and close out work that could not survive restart."""
+    store.interrupt_unfinished_tasks(updated_at=datetime.now(timezone.utc).isoformat())
     system_logs[:] = store.list_logs(limit=200)
     generated_charts[:] = store.list_charts()
     human_evaluations[:] = store.list_evaluations()
@@ -164,29 +182,20 @@ def require_token(token: Optional[str] = None):
     raise HTTPException(status_code=401, detail='Unauthorized')
 
 
-def token_auth(authorization: Optional[str] = Header(None), token_form: Optional[str] = None):
-    """Dependency that extracts token from Authorization header or form and validates it."""
-    token = token_form or (authorization or '').replace('Bearer ', '')
-    return require_token(token)
+def token_auth(request: Request, authorization: Optional[str] = Header(None)):
+    """Accept the API token from Bearer auth or the download-link query parameter."""
+    bearer = (authorization or '').replace('Bearer ', '').strip()
+    query_token = request.query_params.get('api_token')
+    return require_token(bearer or query_token)
 
 
 async def add_system_log(level: str, message: str):
-    entry = {'timestamp': datetime.utcnow().isoformat(), 'level': level, 'message': message}
+    entry = {'timestamp': datetime.now(timezone.utc).isoformat(), 'level': level, 'message': message}
     system_logs.insert(0, entry)
     # Keep last 200
     del system_logs[200:]
     store.append_log(entry)
     await sio.emit('system_log', entry)
-
-
-def lazy_load_training_utils():
-    try:
-        # Import when needed to avoid heavy import-time deps (wandb etc.)
-        from train_transformer import load_config as load_training_config
-        return load_training_config
-    except Exception as e:
-        # Don't crash server; caller should handle None
-        return None
 
 
 @app.get('/')
@@ -210,7 +219,7 @@ async def favicon():
     fav_path = BASE_DIR / 'static' / 'favicon.ico'
     if fav_path.exists():
         return FileResponse(fav_path)
-    return JSONResponse(status_code=204, content="")
+    return Response(status_code=204)
 
 
 @app.get('/static/{filename:path}')
@@ -223,21 +232,40 @@ async def static_files(filename: str):
 
 @app.get('/api/status')
 async def api_status():
-    generation_active = any(t.get('status') in {'queued', 'running'} for t in active_tasks if t.get('task_type') == 'generation')
-    return {'status': 'ready', 'models_loaded': len(active_models), 'training_active': False, 'generation_active': generation_active}
+    active_tasks[:] = store.list_tasks(limit=100)
+    generation_active = any(
+        t.get('status') in {'queued', 'running'} and t.get('task_type') == 'generation'
+        for t in active_tasks
+    )
+    training_active = any(
+        t.get('status') in {'queued', 'running'} and t.get('task_type') == 'training'
+        for t in active_tasks
+    )
+    return {
+        'status': 'ready',
+        'models_loaded': len([m for m in active_models.values() if m.get('status') == 'ready']),
+        'models_available': len(active_models),
+        'training_active': training_active,
+        'generation_active': generation_active,
+    }
 
 
 @app.get('/api/dashboard')
 async def api_dashboard():
-    best_accuracy = max((m.get('accuracy', 0) for m in active_models.values()), default=0)
+    charts = store.list_charts(limit=500)
+    generated_charts[:] = charts
+    rated = [chart for chart in charts if float(chart.get('rating', 0) or 0) > 0]
+    average_rating = (
+        sum(float(chart.get('rating', 0) or 0) for chart in rated) / len(rated)
+        if rated else None
+    )
     return {
         'metrics': {
-            'active_models': len([m for m in active_models.values() if m.get('status') == 'ready']),
-            'generated_charts': len(generated_charts),
-            'best_accuracy': best_accuracy,
-            'avg_rating': round(sum((c.get('rating', 0) for c in generated_charts)) / (len(generated_charts) or 1), 1)
+            'generated_charts': store.count_charts(),
+            'rated_charts': len(rated),
+            'avg_rating': round(average_rating, 2) if average_rating is not None else None,
         },
-        'recent_logs': system_logs[:10]
+        'recent_logs': system_logs[:10],
     }
 
 
@@ -263,17 +291,42 @@ async def api_update_config(payload: ConfigUpdateRequest, _auth: bool = Depends(
     return {"success": True, "config": merged}
 
 
+def _inspect_audio(path: Path) -> tuple[Optional[float], Optional[float]]:
+    """Best-effort metadata for the upload UI; generation does its own preprocessing."""
+    try:
+        import librosa
+        import numpy as np
+
+        wav, sr = librosa.load(str(path), sr=22050, mono=True)
+        if wav.size == 0:
+            return None, None
+        duration = float(librosa.get_duration(y=wav, sr=sr))
+        tempo = librosa.beat.beat_track(y=wav, sr=sr)[0]
+        bpm = float(np.atleast_1d(tempo)[0])
+        if not np.isfinite(bpm) or bpm <= 0:
+            bpm = None
+        return duration, bpm
+    except Exception:
+        logger.warning("Could not inspect uploaded audio %s", path, exc_info=True)
+        return None, None
+
+
 @app.post('/api/upload-audio')
 async def api_upload_audio(
     filename: Optional[str] = None,
     content: Optional[bytes] = None,
+    audio: Optional[UploadFile] = File(default=None),
     file: Optional[UploadFile] = File(default=None),
     _auth: bool = Depends(token_auth),
 ) -> UploadAudioResponse:
-    # Preferred request style: multipart upload via `file`.
-    if isinstance(file, UploadFile):
-        filename = file.filename
-        content = await file.read()
+    upload = (
+        audio if isinstance(audio, StarletteUploadFile)
+        else file if isinstance(file, StarletteUploadFile)
+        else None
+    )
+    if upload is not None:
+        filename = upload.filename
+        content = await upload.read()
 
     if not filename or content is None:
         raise HTTPException(status_code=400, detail='No file provided')
@@ -282,129 +335,318 @@ async def api_upload_audio(
     allowed = {'.mp3', '.wav', '.ogg', '.flac', '.m4a', '.aac'}
     if Path(filename).suffix.lower() not in allowed:
         raise HTTPException(status_code=400, detail='Unsupported file type')
-    if len(content) > 50 * 1024 * 1024:
-        raise HTTPException(status_code=413, detail='File too large (max 50MB)')
+    if len(content) > 100 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail='File too large (max 100MB)')
 
     dest = UPLOAD_FOLDER / filename
-    # Stream to disk
-    with open(dest, 'wb') as f:
-        f.write(content)
+    with open(dest, 'wb') as handle:
+        handle.write(content)
 
-    # Minimal processing: return title
+    duration, detected_bpm = await asyncio.to_thread(_inspect_audio, dest)
     title = filename.rsplit('.', 1)[0].replace('_', ' ').replace('-', ' ').title()
     await add_system_log('success', f'Audio uploaded: {filename}')
-    return UploadAudioResponse(success=True, filename=filename, title=title)
+    return UploadAudioResponse(
+        success=True,
+        filename=filename,
+        title=title,
+        duration=duration,
+        detected_bpm=detected_bpm,
+        ready_for_generation=True,
+    )
 
 
-def _run_generation_job(task_id: int, title: str, artist: str, bpm: int, genre: str, difficulty: str, pattern_style: str):
-    import time
-    from web.tasks import run_task, TASKS_REGISTRY
+class GenerationCancelled(RuntimeError):
+    pass
 
+
+def _emit_from_worker(loop: asyncio.AbstractEventLoop, event: str, payload: dict) -> None:
     try:
-        # We hook into the existing run_task from tasks.py.
-        # But first, we need to register the task in TASKS_REGISTRY.
-        # It's better to just delegate to web.tasks entirely so we don't reinvent the wheel.
-        # But for now, we'll just run our logic here that interacts with the real store.
+        future = asyncio.run_coroutine_threadsafe(sio.emit(event, payload), loop)
+        future.add_done_callback(
+            lambda done: logger.error("Socket emit failed: %s", done.exception())
+            if done.exception() is not None else None
+        )
+    except Exception:
+        logger.warning("Could not emit %s from worker", event, exc_info=True)
 
+
+def _run_generation_job(
+    task_id: int,
+    audio_filename: str,
+    title: str,
+    artist: str,
+    bpm: Optional[float],
+    genre: str,
+    difficulty: str,
+    pattern_style: str,
+    loop: asyncio.AbstractEventLoop,
+):
+    from taikonation.generation.osu_export import save_timestamped_osu
+    from taikonation.generation.softchart_backend import generate_from_audio
+
+    audio_path = UPLOAD_FOLDER / Path(audio_filename).name
+
+    def progress(percent: int, message: str) -> None:
+        current = store.get_task(task_id)
+        if current and current.get('status') == 'cancelled':
+            raise GenerationCancelled("Generation cancelled by user")
         store.update_task(
             task_id,
             status='running',
-            progress=0,
-            message='Generation started',
-            updated_at=datetime.utcnow().isoformat(),
+            progress=max(0, min(int(percent), 99)),
+            message=message,
+            updated_at=datetime.now(timezone.utc).isoformat(),
+        )
+        _emit_from_worker(
+            loop,
+            'generation_progress',
+            {'task_id': task_id, 'progress': int(percent), 'message': message},
         )
 
-        from web.server import start_chart_generation
+    try:
+        if not audio_path.is_file():
+            raise FileNotFoundError(f"Uploaded audio not found: {audio_filename}")
 
-        params = {
+        progress(1, 'Loading pretrained Taiko model')
+        result = generate_from_audio(
+            audio_path,
+            course=difficulty,
+            bpm=bpm,
+            greedy=True,
+            on_progress=progress,
+        )
+        active_models["softchart-v17"].update({
+            "status": "ready",
+            "device": result.device,
+            "model_id": result.model_id,
+        })
+
+        safe_title = ''.join(
+            ch if ch.isalnum() or ch in {'-', '_'} else '_'
+            for ch in title
+        ).strip('_')[:60] or 'chart'
+        output_filename = f"{task_id}_{safe_title}_{difficulty}.osu"
+        output_path = CHART_OUTPUT_FOLDER / output_filename
+        save_timestamped_osu(
+            result.events,
+            output_path,
+            audio_filename=audio_path.name,
+            title=title,
+            artist=artist,
+            difficulty=difficulty,
+            bpm=result.bpm,
+        )
+
+        chart = store.create_chart({
             'title': title,
             'artist': artist,
-            'bpm': bpm,
-            'genre': genre,
             'difficulty': difficulty,
-            'pattern_style': pattern_style,
-        }
+            'bpm': result.bpm,
+            'genre': genre,
+            'filename': output_filename,
+            'audio_filename': audio_path.name,
+            'model_id': result.model_id,
+            'timing_mode': result.timing_mode,
+            'rating': 0,
+            'plays': 0,
+            'created_at': datetime.now(timezone.utc).isoformat(),
+        })
 
-        # This function generates the chart and saves the .osu file using real ML code.
-        chart = start_chart_generation(params)
-
-        # update the db task state.
         store.update_task(
             task_id,
             status='completed',
             progress=100,
             message='Generation completed',
-            result={'chart_id': chart['id']},
-            updated_at=datetime.utcnow().isoformat(),
+            result={'chart_id': chart['id'], 'filename': output_filename},
+            updated_at=datetime.now(timezone.utc).isoformat(),
         )
-
-        # sync in-memory lists (mostly for compatibility with existing tests/endpoints)
         active_tasks[:] = store.list_tasks(limit=100)
         generated_charts[:] = store.list_charts()
-
-    except Exception as exc:
-        store.update_task(
-            task_id,
-            status='failed',
-            message=str(exc),
-            updated_at=datetime.utcnow().isoformat(),
+        _emit_from_worker(
+            loop,
+            'generation_progress',
+            {'task_id': task_id, 'progress': 100, 'message': 'Generation completed'},
         )
+        _emit_from_worker(loop, 'chart_generated', {'chart': chart})
+    except GenerationCancelled:
         active_tasks[:] = store.list_tasks(limit=100)
+        _emit_from_worker(
+            loop,
+            'generation_progress',
+            {'task_id': task_id, 'progress': 0, 'message': 'Generation cancelled', 'cancelled': True},
+        )
+    except Exception as exc:
+        logger.error("Generation task %s failed", task_id, exc_info=True)
+        current = store.get_task(task_id)
+        if not current or current.get('status') != 'cancelled':
+            store.update_task(
+                task_id,
+                status='failed',
+                message=str(exc),
+                updated_at=datetime.now(timezone.utc).isoformat(),
+            )
+        active_tasks[:] = store.list_tasks(limit=100)
+        _emit_from_worker(
+            loop,
+            'generation_failed',
+            {'task_id': task_id, 'error': str(exc)},
+        )
 
 
-def _run_training_job(task_id: int, model_dump: dict):
-    from web.tasks import train_model_with_progress
+class TrainingCancelled(RuntimeError):
+    pass
+
+
+def _run_training_job(
+    task_id: int,
+    model_dump: dict,
+    loop: asyncio.AbstractEventLoop,
+):
+    from taikonation.training.trainer import load_config as load_training_config
+    from taikonation.training.trainer import main as train_main
+
     try:
+        current = store.get_task(task_id)
+        if current and current.get('status') == 'cancelled':
+            return
+
+        config = load_training_config(str(CONFIG_FOLDER / 'default.yaml'))
+        model_keys = {'d_model', 'nhead', 'num_encoder_layers', 'num_decoder_layers'}
+        training_keys = {'learning_rate', 'batch_size'}
+        config['model'].update({k: v for k, v in model_dump.items() if k in model_keys})
+        config['training'].update({k: v for k, v in model_dump.items() if k in training_keys})
+        config['training']['use_wandb'] = False
+
         store.update_task(
             task_id,
             status='running',
-            progress=0,
+            progress=1,
             message='Training started',
-            updated_at=datetime.utcnow().isoformat(),
+            updated_at=datetime.now(timezone.utc).isoformat(),
         )
 
-        result = train_model_with_progress(str(task_id), model_dump)
+        def progress(info: dict) -> None:
+            current = store.get_task(task_id)
+            if current and current.get('status') == 'cancelled':
+                raise TrainingCancelled("Training cancelled by user")
+            folds = max(int(info.get('folds', 1)), 1)
+            epochs = max(int(info.get('epochs', 1)), 1)
+            fold = max(int(info.get('fold', 1)), 1)
+            epoch = max(int(info.get('epoch', 1)), 1)
+            completed = (fold - 1) * epochs + epoch
+            total = folds * epochs
+            percent = min(99, 5 + int(90 * completed / total))
+            val = info.get('val', {})
+            message = (
+                f"Fold {fold}/{folds}, epoch {epoch}/{epochs}"
+                f" - val loss {float(val.get('loss', 0.0)):.4f}"
+            )
+            store.update_task(
+                task_id,
+                status='running',
+                progress=percent,
+                message=message,
+                updated_at=datetime.now(timezone.utc).isoformat(),
+            )
+            _emit_from_worker(
+                loop,
+                'training_progress',
+                {
+                    'task_id': task_id,
+                    'progress': percent,
+                    'metrics': {
+                        'train_loss': info.get('train', {}).get('loss'),
+                        'val_loss': val.get('loss'),
+                        'val_accuracy': val.get('accuracy'),
+                    },
+                },
+            )
+
+        results = train_main(config, progress_callback=progress)
 
         store.update_task(
             task_id,
             status='completed',
             progress=100,
             message='Training completed',
-            result=result,
-            updated_at=datetime.utcnow().isoformat(),
+            result={'folds': results},
+            updated_at=datetime.now(timezone.utc).isoformat(),
         )
         active_tasks[:] = store.list_tasks(limit=100)
+        _emit_from_worker(
+            loop,
+            'training_progress',
+            {'task_id': task_id, 'progress': 100, 'metrics': {}},
+        )
+    except TrainingCancelled:
+        active_tasks[:] = store.list_tasks(limit=100)
+        _emit_from_worker(
+            loop,
+            'training_progress',
+            {'task_id': task_id, 'progress': 0, 'metrics': {}, 'cancelled': True},
+        )
     except Exception as exc:
-        store.update_task(
-            task_id,
-            status='failed',
-            message=str(exc),
-            updated_at=datetime.utcnow().isoformat(),
-        )
+        logger.error("Training task %s failed", task_id, exc_info=True)
+        current = store.get_task(task_id)
+        if not current or current.get('status') != 'cancelled':
+            store.update_task(
+                task_id,
+                status='failed',
+                message=str(exc),
+                updated_at=datetime.now(timezone.utc).isoformat(),
+            )
         active_tasks[:] = store.list_tasks(limit=100)
+        _emit_from_worker(
+            loop,
+            'training_failed',
+            {'task_id': task_id, 'error': str(exc)},
+        )
 
 
 @app.post('/api/generate-chart')
 async def api_generate_chart(
-    request: GenerateChartRequest = GenerateChartRequest(),
-    _auth: bool = Depends(token_auth)
+    request: GenerateChartRequest,
+    _auth: bool = Depends(token_auth),
 ):
-    title = request.title
-    artist = request.artist
-    bpm = request.bpm
-    genre = request.genre
-    difficulty = request.difficulty
-    pattern_style = request.pattern_style
-    await add_system_log('info', f'Chart generation started: {title}')
+    audio_filename = Path(request.audio_filename).name
+    audio_path = UPLOAD_FOLDER / audio_filename
+    difficulty = {
+        'kantan': 'easy',
+        'futsuu': 'normal',
+        'muzukashii': 'hard',
+    }.get(request.difficulty, request.difficulty)
+    if not audio_path.is_file():
+        raise HTTPException(status_code=404, detail='Uploaded audio not found')
+
+    await add_system_log('info', f'Chart generation started: {request.title}')
     task = store.create_task(
         task_type='generation',
-        payload={'title': title, 'artist': artist, 'difficulty': difficulty, 'bpm': bpm, 'genre': genre},
-        created_at=datetime.utcnow().isoformat(),
+        payload={
+            'audio_filename': audio_filename,
+            'title': request.title,
+            'artist': request.artist,
+            'difficulty': difficulty,
+            'bpm': request.bpm,
+            'genre': request.genre,
+            'pattern_style': request.pattern_style,
+        },
+        created_at=datetime.now(timezone.utc).isoformat(),
     )
     active_tasks.insert(0, task)
 
-    # schedule real background job
-    executor.submit(_run_generation_job, task['id'], title, artist, bpm, genre, difficulty, pattern_style)
+    loop = asyncio.get_running_loop()
+    executor.submit(
+        _run_generation_job,
+        task['id'],
+        audio_filename,
+        request.title,
+        request.artist,
+        request.bpm,
+        request.genre,
+        difficulty,
+        request.pattern_style,
+        loop,
+    )
     return {'success': True, 'message': 'Chart generation started', 'task_id': task['id']}
 
 
@@ -431,13 +673,13 @@ async def api_cancel_task(task_id: int, _auth: bool = Depends(token_auth)):
     task = store.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail='Task not found')
-    if task.get('status') in {'completed', 'failed', 'cancelled'}:
+    if task.get('status') in {'completed', 'failed', 'cancelled', 'interrupted'}:
         return {'success': False, 'message': f"Task already {task.get('status')}"}
     store.update_task(
         task_id,
         status='cancelled',
         message='Cancelled by user',
-        updated_at=datetime.utcnow().isoformat(),
+        updated_at=datetime.now(timezone.utc).isoformat(),
     )
     active_tasks[:] = store.list_tasks(limit=100)
     await add_system_log('warning', f'Task cancelled: {task_id}')
@@ -465,7 +707,7 @@ async def api_get_chart_for_evaluation():
 @app.get('/api/chart-data')
 async def api_chart_data(id: int = Query(...)):
     chart = store.get_chart(id)
-    if not chart or 'filename' not in chart:
+    if not chart or not chart.get('filename'):
         raise HTTPException(status_code=404, detail='Chart not found')
 
     filepath = CHART_OUTPUT_FOLDER / chart['filename']
@@ -492,19 +734,15 @@ async def api_chart_data(id: int = Query(...)):
                             time = int(parts[2])
                             obj_type = int(parts[3])
                             hit_sound = int(parts[4])
-                            note = {'time': time}
-                            is_finisher = obj_type & 4
-                            if hit_sound == 0:
-                                note['type'] = 'big_don' if is_finisher else 'don'
-                            elif hit_sound == 8:
-                                note['type'] = 'big_ka' if is_finisher else 'ka'
-                            elif hit_sound == 4:
-                                note['type'] = 'big_don'
-                            elif hit_sound == 2:
-                                note['type'] = 'big_ka'
-                            else:
+                            if not (obj_type & 1):
                                 continue
-                            notes.append(note)
+                            is_big = bool(hit_sound & 4)
+                            is_ka = bool(hit_sound & 8 or hit_sound & 2)
+                            if is_ka:
+                                note_type = 'big_ka' if is_big else 'ka'
+                            else:
+                                note_type = 'big_don' if is_big else 'don'
+                            notes.append({'time': time, 'type': note_type})
         except Exception as e:
             # Assuming `logger` is a configured logging instance at the module level
             logger.error(f"Failed to parse .osu file {filepath}: {e}", exc_info=True)
@@ -518,19 +756,93 @@ async def api_chart_data(id: int = Query(...)):
     return {'notes': notes, 'metadata': chart}
 
 
+def _resolve_chart_audio_path(audio_filename: str) -> Optional[Path]:
+    """Resolve current uploads first, then the pre-revival legacy audio location."""
+    safe_name = Path(audio_filename).name
+    if not safe_name:
+        return None
+    for folder in (UPLOAD_FOLDER, LEGACY_AUDIO_FOLDER):
+        candidate = folder / safe_name
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _build_osz_archive(chart: Dict[str, Any]) -> Path:
+    """Build a temporary osu! beatmap archive from a persisted chart + source audio."""
+    osu_filename = Path(str(chart.get('filename') or '')).name
+    audio_filename = Path(str(chart.get('audio_filename') or '')).name
+    if not osu_filename:
+        raise HTTPException(status_code=404, detail='Chart file is not recorded')
+    if not audio_filename:
+        raise HTTPException(
+            status_code=409,
+            detail='Source audio is not recorded for this chart; download the raw .osu instead',
+        )
+
+    osu_path = CHART_OUTPUT_FOLDER / osu_filename
+    audio_path = _resolve_chart_audio_path(audio_filename)
+    if not osu_path.is_file():
+        raise HTTPException(status_code=404, detail='Chart file not found on disk')
+    if audio_path is None:
+        raise HTTPException(
+            status_code=404,
+            detail='Source audio not found on disk; download the raw .osu instead',
+        )
+
+    temp = tempfile.NamedTemporaryFile(
+        prefix='rhythm-tatsujin-',
+        suffix='.osz',
+        delete=False,
+    )
+    temp_path = Path(temp.name)
+    temp.close()
+    try:
+        with zipfile.ZipFile(temp_path, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.write(osu_path, arcname=osu_filename)
+            archive.write(audio_path, arcname=audio_filename)
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        raise
+
+    return temp_path
+
+
 @app.get('/api/download-chart')
-async def download_chart(id: int = Query(...), _auth: bool = Depends(token_auth)):
+async def download_chart(
+    id: int = Query(...),
+    format: str = Query('osz', pattern='^(osz|osu)$'),
+    _auth: bool = Depends(token_auth),
+):
     chart = store.get_chart(id)
-    if not chart or 'filename' not in chart:
+    if not chart or not chart.get('filename'):
         raise HTTPException(status_code=404, detail='Chart not found')
 
     filename = Path(chart['filename']).name
     filepath = CHART_OUTPUT_FOLDER / filename
-
-    if not filepath.exists():
+    if not filepath.is_file():
         raise HTTPException(status_code=404, detail='Chart file not found on disk')
 
-    return FileResponse(filepath, filename=filename)
+    if format == 'osu':
+        return FileResponse(filepath, filename=filename, media_type='text/plain')
+
+    archive_path = _build_osz_archive(chart)
+    archive_filename = f"{Path(filename).stem}.osz"
+    return FileResponse(
+        archive_path,
+        filename=archive_filename,
+        media_type='application/zip',
+        background=BackgroundTask(archive_path.unlink, missing_ok=True),
+    )
+
+
+@app.post('/api/submit-rating')
+async def api_submit_rating(request: SubmitRatingRequest, _auth: bool = Depends(token_auth)):
+    if not store.set_chart_rating(request.chart_id, request.rating):
+        raise HTTPException(status_code=404, detail='Chart not found')
+    generated_charts[:] = store.list_charts()
+    await add_system_log('success', f'Rating submitted for chart {request.chart_id}')
+    return {'success': True, 'rating': request.rating}
 
 
 @app.post('/api/submit-evaluation')
@@ -542,7 +854,7 @@ async def api_submit_evaluation(request: SubmitEvaluationRequest, _auth: bool = 
         playability=request.playability,
         coherence=request.coherence,
         comments=request.comments,
-        created_at=datetime.utcnow().isoformat(),
+        created_at=datetime.now(timezone.utc).isoformat(),
     )
     if not ok:
         raise HTTPException(status_code=404, detail='Chart not found')
@@ -554,32 +866,60 @@ async def api_submit_evaluation(request: SubmitEvaluationRequest, _auth: bool = 
 
 
 
+def _read_experiment_metadata() -> list[dict]:
+    experiment_root = REPO_ROOT / "experiments"
+    rows = []
+    if not experiment_root.is_dir():
+        return rows
+    for metadata_path in experiment_root.glob("*/experiment.json"):
+        try:
+            with open(metadata_path, "r", encoding="utf-8") as handle:
+                metadata = json.load(handle)
+            if isinstance(metadata, dict):
+                rows.append(metadata)
+        except (OSError, json.JSONDecodeError):
+            logger.warning("Could not read experiment metadata %s", metadata_path, exc_info=True)
+    rows.sort(key=lambda row: row.get("start_time", ""), reverse=True)
+    return rows
+
+
 @app.get('/api/research/experiments')
 async def api_research_experiments():
-    """Return detailed experiment tracking for research analysis"""
-    import numpy as np
+    """Return only persisted experiment/chart/evaluation evidence."""
+    experiments = _read_experiment_metadata()
+    model_runs = []
+    for experiment in experiments:
+        metrics = experiment.get("metrics", {})
+        val = metrics.get("final_val_results", {}) if isinstance(metrics, dict) else {}
+        model_runs.append({
+            "experiment_id": experiment.get("experiment_id"),
+            "name": experiment.get("experiment_name"),
+            "status": experiment.get("status"),
+            "start_time": experiment.get("start_time"),
+            "val_loss": val.get("loss") if isinstance(val, dict) else None,
+            "val_accuracy": val.get("accuracy") if isinstance(val, dict) else None,
+            "best_checkpoint": metrics.get("best_checkpoint") if isinstance(metrics, dict) else None,
+        })
 
-    # Simple placeholder logic replicating Flask version
+    charts = store.list_charts(limit=500)
+    evaluations = store.list_evaluations()
+    rated = [chart for chart in charts if float(chart.get('rating', 0) or 0) > 0]
     return {
-        'experiments': {},
-        'model_comparisons': {
-            'transformer_vs_legacy': {
-                'accuracy': [m.get('accuracy', 0) for m in active_models.values()],
-                'pattern_diversity': [np.random.rand() for _ in active_models] if active_models else [],
-            }
-        },
-        'pattern_evolution': {
-            'timestamps': [c.get('created_at', '') for c in generated_charts],
-            'diversity': [np.random.rand() for _ in generated_charts] if generated_charts else []
+        'experiments': experiments,
+        'training_runs': model_runs,
+        'chart_history': {
+            'timestamps': [c.get('created_at', '') for c in charts],
+            'ratings': [float(c.get('rating', 0) or 0) for c in charts],
+            'difficulties': [c.get('difficulty') for c in charts],
         },
         'human_feedback_stats': {
-            'total_comparisons': len(human_evaluations),
-            'preference_distribution': {
-                'A': sum(1 for f in human_evaluations if f.get('preference') == 'A'),
-                'B': sum(1 for f in human_evaluations if f.get('preference') == 'B'),
-                'tie': sum(1 for f in human_evaluations if f.get('preference') == 'tie'),
-            }
-        }
+            'total_evaluations': len(evaluations),
+            'rated_charts': len(rated),
+            'average_rating': (
+                sum(float(c.get('rating', 0) or 0) for c in rated) / len(rated)
+                if rated else None
+            ),
+        },
     }
 
 
@@ -587,7 +927,7 @@ async def api_research_experiments():
 async def api_save_chart(request: SaveChartRequest, _auth: bool = Depends(token_auth)):
     chart_id = request.id
     chart = store.get_chart(chart_id)
-    if not chart or 'filename' not in chart:
+    if not chart or not chart.get('filename'):
         raise HTTPException(status_code=404, detail='Chart not found')
 
     filepath = CHART_OUTPUT_FOLDER / chart['filename']
@@ -612,18 +952,16 @@ async def api_save_chart(request: SaveChartRequest, _auth: bool = Depends(token_
         for note in request.notes:
             time = note.get('time', 0)
             note_type = note.get('type', 'don')
-            x, y, obj_type, hit_sound, extras = 256, 192, 1, 0, '0:0:0:0:'
+            x, y, obj_type, hit_sound, extras = 256, 192, 1, 0, '3:3:0:70:'
 
             if note_type == 'don':
                 hit_sound = 0
             elif note_type == 'ka':
                 hit_sound = 8
             elif note_type == 'big_don':
-                obj_type = 5
                 hit_sound = 4
             elif note_type == 'big_ka':
-                obj_type = 5
-                hit_sound = 2
+                hit_sound = 12
 
             new_hit_objects.append(f"{x},{y},{time},{obj_type},{hit_sound},{extras}\n")
 
@@ -645,61 +983,29 @@ async def api_start_training(request: StartTrainingRequest, _auth: bool = Depend
     task = store.create_task(
         task_type='training',
         payload=request.model_dump(),
-        created_at=datetime.utcnow().isoformat(),
+        created_at=datetime.now(timezone.utc).isoformat(),
     )
     active_tasks.insert(0, task)
-
-    # schedule real training job
-    executor.submit(_run_training_job, task['id'], request.model_dump())
+    loop = asyncio.get_running_loop()
+    executor.submit(_run_training_job, task['id'], request.model_dump(), loop)
     return {'success': True, 'task_id': task['id'], 'message': 'Training started.'}
 
 
 @app.post('/api/stop-training')
 async def api_stop_training(_auth: bool = Depends(token_auth)):
-    await add_system_log('info', 'Training stopped by user')
-    return {'success': True}
-
-
-@app.post('/api/submit-comparative-evaluation')
-async def api_submit_comparative_evaluation(request: SubmitComparativeEvaluationRequest, _auth: bool = Depends(token_auth)):
-    chart_a = store.get_chart(request.chartA_id)
-    chart_b = store.get_chart(request.chartB_id)
-
-    if not chart_a or not chart_b:
-        raise HTTPException(status_code=400, detail='Invalid chart IDs')
-
-    eval_record = {
-        'chart_pair': [request.chartA_id, request.chartB_id],
-        'preference': request.preference,
-        'timestamp': datetime.utcnow().isoformat()
-    }
-    human_evaluations.append(eval_record)
-    await add_system_log('success', 'Comparative evaluation submitted successfully')
-    return {'success': True}
-
-
-@app.post('/api/submit_audio_classification')
-async def api_submit_audio_classification(request: Request):
-    data = await request.json()
-    # Placeholder to accept classifications from MediaPipe client
-    return {
-        'status': 'success',
-        'message': 'Audio classification received',
-        'sections': [],
-        'percussion_ratio': data.get('analysis', {}).get('avg_percussion_ratio', 0),
-        'melodic_ratio': data.get('analysis', {}).get('avg_melodic_ratio', 0)
-    }
-
-
-@app.post('/api/generate_chart_with_audio_analysis')
-async def api_generate_chart_with_audio_analysis(request: Request, _auth: bool = Depends(token_auth)):
-    data = await request.json()
-    # Placeholder for the enhanced ML generation API
-    return {
-        'status': 'success',
-        'chart': [],
-        'used_classification': True
-    }
+    cancelled = []
+    for task in store.list_tasks(limit=500):
+        if task.get('task_type') == 'training' and task.get('status') in {'queued', 'running'}:
+            store.update_task(
+                task['id'],
+                status='cancelled',
+                message='Cancelled by user',
+                updated_at=datetime.now(timezone.utc).isoformat(),
+            )
+            cancelled.append(task['id'])
+    active_tasks[:] = store.list_tasks(limit=100)
+    await add_system_log('info', f'Training stop requested for {len(cancelled)} task(s)')
+    return {'success': True, 'cancelled_task_ids': cancelled}
 
 
 @app.get('/api/research/export-dataset')
@@ -722,7 +1028,7 @@ async def api_research_export_dataset():
         'human_evaluations': current_evals,
         'model_configurations': current_model_configs,
         'audio_features': current_audio_features,
-        'exported_at': datetime.utcnow().isoformat()
+        'exported_at': datetime.now(timezone.utc).isoformat()
     }
 
     buffer = io.BytesIO()

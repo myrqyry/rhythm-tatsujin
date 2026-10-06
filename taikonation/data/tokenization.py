@@ -6,19 +6,18 @@ class TaikoTokenizer:
     A tokenizer for Taiko no Tatsujin charts, inspired by BEaRT-style tokenization.
 
     It converts high-resolution chart data into a sequence of discrete tokens,
-    where each token represents a quantized time step (e.g., 100ms) and encodes
-    all the note events that occurred within that step.
+    where each token represents a quantized time step and encodes all note
+    events that occurred within that step. The default keeps two original
+    TaikoNation ~23.2 ms frames per token.
     """
-    def __init__(self, time_quantization=100, source_resolution=23.2):
+    def __init__(self, time_quantization=46.4, source_resolution=23.2):
         """
         Initializes the tokenizer.
 
         Args:
-            time_quantization (int): The target time resolution in milliseconds for each token.
-            source_resolution (float): The assumed time resolution in ms of the source .npy data.
-                                       This is a critical assumption as the original data format
-                                       is not documented. 23.2ms corresponds to a common audio
-                                       setting of 22050 Hz / 512 hop length.
+            time_quantization (float): Target milliseconds represented by each token.
+            source_resolution (float): Resolution of the source TaikoNation arrays.
+                                       The paper describes approximately 23 ms timesteps.
         """
         self.time_quantization = time_quantization
         self.source_resolution = source_resolution
@@ -97,8 +96,8 @@ class TaikoTokenizer:
         for i in range(0, num_steps, self.steps_per_chunk):
             chunk = note_data[i:i + self.steps_per_chunk]
 
-            # Combine all events in the chunk using a bitwise OR.
-            # This means if an event happens at all in the 100ms window, it's included.
+            # Combine all events in this short temporal bucket. At the
+            # default 46.4 ms resolution this merges two source frames.
             combined_vector = np.logical_or.reduce(chunk, axis=0)
 
             token_id = self._vector_to_token_id(combined_vector)

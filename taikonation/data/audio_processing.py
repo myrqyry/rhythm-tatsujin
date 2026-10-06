@@ -1,7 +1,6 @@
-import librosa
 import numpy as np
 
-def get_audio_features(audio_path, source_resolution_ms=23.2, frame_duration_ms=100):
+def get_audio_features(audio_path, source_resolution_ms=23.2, frame_duration_ms=46.4):
     """
     Loads pre-computed audio features from a .npy file and frames them to align
     with the tokenization time steps.
@@ -13,7 +12,7 @@ def get_audio_features(audio_path, source_resolution_ms=23.2, frame_duration_ms=
         audio_path (str): Path to the .npy audio feature file.
         source_resolution_ms (float): The time resolution of each row in the source .npy file.
                                       23.2ms corresponds to 22050Hz / 512 hop_length.
-        frame_duration_ms (int): The target duration of each output frame, matching the tokenizer.
+        frame_duration_ms (float): Target duration of each model frame, matching the tokenizer.
 
     Returns:
         np.ndarray: A numpy array of shape (num_frames, feature_size), where each
@@ -32,18 +31,14 @@ def get_audio_features(audio_path, source_resolution_ms=23.2, frame_duration_ms=
 
         num_source_steps = audio_features.shape[0]
         num_frames = num_source_steps // steps_per_frame
+        if num_frames == 0:
+            return np.empty((0, audio_features.shape[1]), dtype=np.float32)
 
-        framed_features = []
-        for i in range(num_frames):
-            start = i * steps_per_frame
-            end = start + steps_per_frame
-            chunk = audio_features[start:end]
-
-            # Aggregate the features in the chunk. Mean is a reasonable choice.
-            frame = np.mean(chunk, axis=0)
-            framed_features.append(frame)
-
-        return np.array(framed_features)
+        # Vectorized framing keeps corpus preparation cheap even at the
+        # finer default 46.4 ms model resolution.
+        trimmed = audio_features[: num_frames * steps_per_frame]
+        framed = trimmed.reshape(num_frames, steps_per_frame, audio_features.shape[1]).mean(axis=1)
+        return framed.astype(np.float32, copy=False)
 
     except Exception as e:
         print(f"Error processing audio feature file {audio_path}: {e}")

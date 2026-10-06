@@ -22,8 +22,12 @@ class EnhancedChartGenerator:
         self.model = model
         self.use_mediapipe = use_mediapipe
         self.mediapipe_analyzer = MediaPipeAudioAnalyzer() if use_mediapipe else None
-        self._tokenizer = TaikoTokenizer()
         self._config = load_config(config_path)
+        self._data_config = getattr(model, "taikonation_data_config", self._config["data"])
+        self._tokenizer = TaikoTokenizer(
+            time_quantization=self._data_config["time_quantization_ms"],
+            source_resolution=self._data_config["source_resolution_ms"],
+        )
 
     def generate(self, audio_path, difficulty, mediapipe_data=None):
         """
@@ -35,8 +39,19 @@ class EnhancedChartGenerator:
             mediapipe_data: Optional dict with MediaPipe classifications
         """
 
-        # Load standard mel features (your existing code)
-        mel_features = get_audio_features(audio_path)
+        # Frame and normalize source features exactly as the checkpoint saw them.
+        data_config = self._data_config
+        mel_features = get_audio_features(
+            audio_path,
+            source_resolution_ms=data_config["source_resolution_ms"],
+            frame_duration_ms=data_config["time_quantization_ms"],
+        )
+        if mel_features is None:
+            raise ValueError("Could not frame input audio features")
+        if data_config.get("feature_mean") is not None and data_config.get("feature_std") is not None:
+            mean = np.asarray(data_config["feature_mean"], dtype=np.float32)
+            std = np.maximum(np.asarray(data_config["feature_std"], dtype=np.float32), 1e-4)
+            mel_features = (mel_features - mean) / std
 
         # Enhance with MediaPipe if available
         if mediapipe_data and self.use_mediapipe:
@@ -69,9 +84,10 @@ class EnhancedChartGenerator:
         charts = []
 
         for section in sections:
-            # Calculate frame indices
-            start_frame = int(section['start'] / 0.0232)
-            end_frame = int(section['end'] / 0.0232)
+            # Calculate frame indices at the checkpoint's actual model resolution.
+            frame_seconds = float(self._data_config["time_quantization_ms"]) / 1000.0
+            start_frame = int(section['start'] / frame_seconds)
+            end_frame = int(section['end'] / frame_seconds)
 
             section_features = features[start_frame:end_frame]
 
@@ -109,39 +125,44 @@ def load_config(config_path):
         config = yaml.safe_load(f)
     return config
 
-def load_model(checkpoint_path, config, device, quantize=False):
-    """Loads a trained model from a checkpoint."""
+def load_model(checkpoint_path, config, device, quantize=False, allow_random=False):
+    """Load a trained research checkpoint, reconstructing its saved architecture."""
     vocab_size = TaikoTokenizer().vocab_size
     num_difficulties = len(DIFFICULTY_MAP)
-    num_genres = 10  # Fallback
+    num_genres = 10
 
     checkpoint = None
+    model_config = dict(config['model'])
+    max_sequence_length = int(config['data']['max_sequence_length'])
     if os.path.exists(checkpoint_path):
         checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=True)
         if isinstance(checkpoint, dict) and 'model_config' in checkpoint:
-            num_genres = checkpoint['model_config'].get('num_genres', num_genres)
+            saved = dict(checkpoint['model_config'])
+            num_genres = int(saved.pop('num_genres', num_genres))
+            max_sequence_length = int(saved.pop('max_sequence_length', max_sequence_length))
+            model_config.update(saved)
+    elif not allow_random:
+        raise FileNotFoundError(
+            f"Model checkpoint not found at {checkpoint_path}. "
+            "Train a research model first or use the pretrained SoftChart backend."
+        )
 
     model = TaikoTransformer(
         vocab_size=vocab_size,
         num_genres=num_genres,
         num_difficulties=num_difficulties,
-        d_model=config['model']['d_model'],
-        nhead=config['model']['nhead'],
-        num_encoder_layers=config['model']['num_encoder_layers'],
-        num_decoder_layers=config['model']['num_decoder_layers'],
-        dim_feedforward=config['model']['dim_feedforward'],
-        dropout=config['model']['dropout'],
-        audio_feature_size=config['model']['audio_feature_size'],
-        max_sequence_length=config['data']['max_sequence_length']
+        max_sequence_length=max_sequence_length,
+        **model_config,
     ).to(device)
 
     if checkpoint:
-        if 'model_state_dict' in checkpoint:
-            model.load_state_dict(checkpoint['model_state_dict'])
-        else:
-            model.load_state_dict(checkpoint)
+        state_dict = checkpoint.get('model_state_dict', checkpoint) if isinstance(checkpoint, dict) else checkpoint
+        model.load_state_dict(state_dict)
+
+    if isinstance(checkpoint, dict):
+        model.taikonation_data_config = dict(checkpoint.get("data_config", config["data"]))
     else:
-        print(f"Warning: Model checkpoint not found at {checkpoint_path}. Using random weights.")
+        model.taikonation_data_config = dict(config["data"])
 
     model.eval()
 
@@ -168,7 +189,8 @@ def generate_chart(
     temperature=1.0,
     progress_callback: Optional[Callable[[int, str], None]] = None,
     density_bias=1.0,
-    genre_id=0
+    genre_id=0,
+    initial_token_id=None,
 ):
     """
     Generate a chart with optional progress reporting.
@@ -178,15 +200,17 @@ def generate_chart(
     """
     model.eval()
     encoder_input = torch.from_numpy(audio_features).float().unsqueeze(0).to(device)
-    decoder_input = torch.tensor([[tokenizer.vocab["[CLS]"]]], dtype=torch.long).to(device)
+    first_token = tokenizer.vocab["[CLS]"] if initial_token_id is None else int(initial_token_id)
+    decoder_input = torch.tensor([[first_token]], dtype=torch.long).to(device)
     generated_tokens = []
 
-    max_len = config['data']['max_sequence_length']
+    max_len = int(model.pos_encoder.pe.shape[1])
+    target_steps = max(1, min(max_len, int(audio_features.shape[0])))
 
     if progress_callback:
         progress_callback(5, "Initialized generation pipeline")
 
-    for step in range(max_len - 1):
+    for step in range(target_steps):
         genre_id_tensor = torch.tensor([genre_id], dtype=torch.long).to(device)
         difficulty_tensor = torch.tensor([difficulty_id], dtype=torch.long).to(device)
 
@@ -212,8 +236,8 @@ def generate_chart(
 
         # Report progress every 10 steps
         if progress_callback and step % 10 == 0:
-            progress = int(5 + (step / max_len) * 85)  # 5-90%
-            progress_callback(progress, f"Generated {step}/{max_len} tokens")
+            progress = int(5 + (step / target_steps) * 85)
+            progress_callback(progress, f"Generated {step}/{target_steps} tokens")
 
     if progress_callback:
         progress_callback(95, "Finalizing chart data")
@@ -229,11 +253,13 @@ def save_osu_chart(
     artist=None,
     source="",
     tags="",
+    difficulty="normal",
     bpm=120.0,
     offset_ms=1000,
     hitsound_volume=70,
+    time_quantization_ms=46.4,
 ):
-    """Saves the generated tokens to a basic .osu file."""
+    """Save generated fixed-time tokens to an osu!taiko file."""
     print(f"Saving chart to {output_path}...")
 
     # Infer title and artist from filename if not provided
@@ -270,7 +296,7 @@ Mode: 1
 Title:{title}
 Artist:{artist}
 Creator:TaikoNationV1
-Version:Normal
+Version:{str(difficulty).capitalize()}
 Source:{source}
 Tags:{tags}
 [Difficulty]
@@ -291,44 +317,48 @@ SliderTickRate:1
         with atomic_write(output_path, "w") as f:
             hitobject_lines = []
 
-            # Simple conversion of tokens to hit objects
-            # Keep chart aligned to timing points via a fixed subdivision of beat length.
-            # 1/2 beat spacing approximates common taiko snap usage.
-            time_interval = max(int(round(beat_length / 2.0)), 1)
-            current_time = int(offset_ms)
+            # Token timestamps are fixed-time model frames, not beat subdivisions.
+            # Derive every timestamp from the token index to avoid cumulative
+            # rounding drift over a full song.
+            quantum_ms = max(float(time_quantization_ms), 1e-3)
 
             roll_active = False
-            roll_start_time = current_time
+            roll_start_time = int(offset_ms)
 
-            for token_name in token_names:
+            for step_index, token_name in enumerate(token_names):
+                current_time = int(round(float(offset_ms) + step_index * quantum_ms))
+
                 if token_name in tokenizer.special_tokens or token_name == "[EMPTY]":
-                    current_time += time_interval
                     continue
 
                 if "roll_start" in token_name:
                     roll_active = True
                     roll_start_time = current_time
-                    current_time += time_interval
                     continue
 
                 if "roll_end" in token_name and roll_active:
-                    roll_duration = max(current_time - roll_start_time, time_interval)
+                    roll_duration = max(current_time - roll_start_time, int(round(quantum_ms)))
                     # slider length formula approximation:
                     # duration_ms ≈ (pixel_length * beat_length) / (slider_multiplier * 100)
                     slider_length = max((roll_duration * slider_multiplier * 100.0) / beat_length, 1.0)
                     hit_sample = f"1:0:0:{hitsound_volume}:"
-                    hitobject_lines.append(
+                    hitobject_lines.append((
+                        roll_start_time,
                         f"256,192,{roll_start_time},2,0,B|256:192,1,{slider_length:.2f},0|0,0:0|0:0,{hit_sample}\n"
-                    )
+                    ))
                     roll_active = False
-                    current_time += time_interval
+                    continue
+
+                if roll_active:
                     continue
 
                 if "finisher" in token_name:
-                    spinner_end = current_time + max(time_interval * 2, 1)
+                    spinner_end = current_time + max(int(round(quantum_ms * 2.0)), 1)
                     hit_sample = f"1:0:0:{hitsound_volume}:"
-                    hitobject_lines.append(f"256,192,{current_time},8,0,{spinner_end},{hit_sample}\n")
-                    current_time += time_interval
+                    hitobject_lines.append((
+                        current_time,
+                        f"256,192,{current_time},8,0,{spinner_end},{hit_sample}\n"
+                    ))
                     continue
 
                 # x,y,time,type,hitSound,objectParams,hitSample
@@ -344,9 +374,13 @@ SliderTickRate:1
                 addition_set = 2 if "ka" in token_name else 0
                 hit_sample = f"1:{addition_set}:0:{hitsound_volume}:"
 
-                hitobject_lines.append(f"256,192,{current_time},{note_type},{hit_sound},{hit_sample}\n")
-                current_time += time_interval
-            content = osu_header + "".join(hitobject_lines)
+                hitobject_lines.append((
+                    current_time,
+                    f"256,192,{current_time},{note_type},{hit_sound},{hit_sample}\n"
+                ))
+
+            hitobject_lines.sort(key=lambda item: item[0])
+            content = osu_header + "".join(line for _, line in hitobject_lines)
             export_issues = validate_exported_osu(content)
             for issue in export_issues:
                 print(f"Warning: export validation - {issue}")
@@ -366,14 +400,16 @@ def normalize_export_tokens(token_names):
     roll_depth = 0
     for token in token_names:
         if "roll_start" in token:
-            roll_depth += 1
+            if roll_depth > 0:
+                # osu!taiko rolls do not nest; keep the first open span.
+                continue
+            roll_depth = 1
             normalized.append(token)
             continue
         if "roll_end" in token:
             if roll_depth <= 0:
-                print("Warning: Dropping orphan roll_end token during export normalization.")
                 continue
-            roll_depth -= 1
+            roll_depth = 0
             normalized.append(token)
             continue
         normalized.append(token)
@@ -446,7 +482,13 @@ def main():
     parser.add_argument("--bpm", type=float, default=120.0, help="Base BPM for exported timing points.")
     parser.add_argument("--offset-ms", type=int, default=1000, help="First timing point offset in milliseconds.")
     parser.add_argument("--hitsound-volume", type=int, default=70, help="Per-object hitSample volume (0-100).")
-    parser.add_argument("--quantize", action="store_true", help="Apply INT8 dynamic quantization to the model (CPU only).")
+    parser.add_argument("--quantize", action="store_true", help="Apply INT8 dynamic quantization (runs on CPU).")
+    parser.add_argument(
+        "--device",
+        choices=["auto", "cpu", "cuda"],
+        default="auto",
+        help="Inference device. auto uses CUDA unless --quantize is requested.",
+    )
 
     args = parser.parse_args()
 
@@ -460,17 +502,32 @@ def main():
         print(f"Error: Audio file not found at {args.audio_path}")
         return
 
-    # For now, we'll alert the user that the model file doesn't exist yet
     if not os.path.exists(args.model_path):
-        print(f"Warning: Model checkpoint not found at {args.model_path}. The script will run with a randomly initialized model, producing random output.")
+        parser.error(
+            f"Model checkpoint not found at {args.model_path}. "
+            "Train a research checkpoint first or use the pretrained SoftChart backend."
+        )
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if args.device == "cuda" and not torch.cuda.is_available():
+        parser.error("CUDA was requested but is not available")
+    if args.device == "auto":
+        selected_device = "cpu" if args.quantize else ("cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        selected_device = args.device
+    if args.quantize and selected_device != "cpu":
+        print("INT8 dynamic quantization requires CPU; switching to CPU.")
+        selected_device = "cpu"
+    device = torch.device(selected_device)
     print(f"Using device: {device}")
 
     # --- Load Everything ---
     config = load_config(args.config)
-    tokenizer = TaikoTokenizer()
     model = load_model(args.model_path, config, device, quantize=args.quantize)
+    data_config = getattr(model, "taikonation_data_config", config["data"])
+    tokenizer = TaikoTokenizer(
+        time_quantization=data_config["time_quantization_ms"],
+        source_resolution=data_config["source_resolution_ms"],
+    )
 
     difficulty_str = args.difficulty.lower()
     if difficulty_str not in DIFFICULTY_MAP:
@@ -478,31 +535,76 @@ def main():
         return
     difficulty_id = DIFFICULTY_MAP[difficulty_str]
 
-    # For now, we assume the .npy file is already processed correctly.
-    # A more robust implementation would run get_audio_features here.
     try:
-        audio_features = np.load(args.audio_path)
+        audio_features = get_audio_features(
+            args.audio_path,
+            source_resolution_ms=data_config["source_resolution_ms"],
+            frame_duration_ms=data_config["time_quantization_ms"],
+        )
+        if audio_features is None:
+            raise ValueError("Could not frame input audio features")
 
-        # Validate audio feature shape
-        expected_feature_size = config['model']['audio_feature_size']
+        feature_mean = data_config.get("feature_mean")
+        feature_std = data_config.get("feature_std")
+        if feature_mean is not None and feature_std is not None:
+            mean = np.asarray(feature_mean, dtype=np.float32)
+            std = np.maximum(np.asarray(feature_std, dtype=np.float32), 1e-4)
+            audio_features = (audio_features - mean) / std
+
+        # Validate against the loaded checkpoint architecture, not merely
+        # today's YAML defaults. Smoke/specialized checkpoints may differ.
+        expected_feature_size = model.audio_input_projection.in_features
         if audio_features.shape[1] != expected_feature_size:
             print(f"Error: Audio feature size mismatch. Model expects {expected_feature_size}, but got {audio_features.shape[1]}.")
             print("Please re-run feature extraction with the correct settings.")
             return
 
-        # Truncate the audio features to the model's max sequence length
-        max_len = config['data']['max_sequence_length']
-        if audio_features.shape[0] > max_len:
-            print(f"Warning: Audio features longer than max sequence length ({max_len}). Truncating.")
-            audio_features = audio_features[:max_len, :]
+        max_len = int(model.pos_encoder.pe.shape[1])
     except Exception as e:
         print(f"Error loading or processing audio features: {e}")
         return
 
     # --- Generate and Save ---
-    generated_token_ids = generate_chart(model, audio_features, tokenizer, difficulty_id, config, device, temperature=args.temperature, genre_id=0)
-    save_osu_chart(generated_token_ids, tokenizer, args.output_path, args.audio_path,
-                   title=args.title, artist=args.artist, source=args.source, tags=args.tags, bpm=args.bpm, offset_ms=args.offset_ms, hitsound_volume=args.hitsound_volume)
+    # Walk the whole song in model-sized windows. Each window begins with the
+    # last generated token from the previous window, matching the boundary
+    # context used by the training dataset.
+    generated_token_ids = []
+    previous_token = None
+    total_windows = max(1, math.ceil(audio_features.shape[0] / max_len))
+    for window_index, start in enumerate(range(0, audio_features.shape[0], max_len), start=1):
+        chunk = audio_features[start:start + max_len]
+        print(f"Generating window {window_index}/{total_windows}...")
+        chunk_tokens = generate_chart(
+            model,
+            chunk,
+            tokenizer,
+            difficulty_id,
+            config,
+            device,
+            temperature=args.temperature,
+            genre_id=0,
+            initial_token_id=previous_token,
+        )
+        if not chunk_tokens:
+            continue
+        generated_token_ids.extend(chunk_tokens)
+        previous_token = chunk_tokens[-1]
+
+    save_osu_chart(
+        generated_token_ids,
+        tokenizer,
+        args.output_path,
+        args.audio_path,
+        title=args.title,
+        artist=args.artist,
+        source=args.source,
+        tags=args.tags,
+        difficulty=args.difficulty,
+        bpm=args.bpm,
+        offset_ms=args.offset_ms,
+        hitsound_volume=args.hitsound_volume,
+        time_quantization_ms=data_config["time_quantization_ms"],
+    )
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ import random
 def label_genres_from_filenames(audio_dir, output_path):
     """
     Assigns genre labels to songs based on keywords in their filenames.
-    This is a rule-based placeholder since the source audio is not available.
+    This is a rule-based fallback for legacy feature-only datasets where source audio is unavailable.
     """
     genre_labels = {}
 

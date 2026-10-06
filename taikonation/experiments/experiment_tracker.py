@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 import uuid
 from datetime import datetime
@@ -20,6 +21,7 @@ class ExperimentTracker:
             "git_commit_hash": self._get_git_commit_hash(),
             "config": self.config,
             "metrics": {},
+            "artifacts": [],
             "end_time": None,
             "status": "running"
         }
@@ -45,9 +47,16 @@ class ExperimentTracker:
         self.metadata["metrics"].update(metrics_dict)
 
     def save_artifact(self, file_path):
-        # This is a placeholder for saving artifacts like models.
-        # The implementation will depend on the project's needs.
-        pass
+        source = Path(file_path)
+        if not source.is_file():
+            raise FileNotFoundError(f"Artifact does not exist: {source}")
+        artifact_dir = self.experiment_path / "artifacts"
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+        destination = artifact_dir / source.name
+        if source.resolve() != destination.resolve():
+            shutil.copy2(source, destination)
+        self.metadata["artifacts"].append(str(destination.relative_to(self.experiment_path)))
+        return destination
 
     def finalize(self, status="completed"):
         self.metadata["end_time"] = datetime.now().isoformat()

@@ -46,8 +46,12 @@ class StudioStore:
                         title TEXT NOT NULL,
                         artist TEXT NOT NULL,
                         difficulty TEXT NOT NULL,
-                        bpm INTEGER NOT NULL,
+                        bpm REAL NOT NULL,
                         genre TEXT NOT NULL,
+                        filename TEXT,
+                        audio_filename TEXT,
+                        model_id TEXT,
+                        timing_mode TEXT,
                         rating REAL NOT NULL DEFAULT 0,
                         plays INTEGER NOT NULL DEFAULT 0,
                         created_at TEXT NOT NULL
@@ -83,6 +87,15 @@ class StudioStore:
                     );
                     """
                 )
+                existing = {row["name"] for row in conn.execute("PRAGMA table_info(charts)")}
+                for name, sql_type in {
+                    "filename": "TEXT",
+                    "audio_filename": "TEXT",
+                    "model_id": "TEXT",
+                    "timing_mode": "TEXT",
+                }.items():
+                    if name not in existing:
+                        conn.execute(f"ALTER TABLE charts ADD COLUMN {name} {sql_type}")
 
     def append_log(self, entry: Dict[str, Any]) -> None:
         with _LOCK:
@@ -105,15 +118,22 @@ class StudioStore:
             with self._connect() as conn:
                 cur = conn.execute(
                     """
-                    INSERT INTO charts(title, artist, difficulty, bpm, genre, rating, plays, created_at)
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO charts(
+                        title, artist, difficulty, bpm, genre, filename,
+                        audio_filename, model_id, timing_mode, rating, plays, created_at
+                    )
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         chart["title"],
                         chart["artist"],
                         chart["difficulty"],
-                        int(chart["bpm"]),
+                        float(chart["bpm"]),
                         chart["genre"],
+                        chart.get("filename"),
+                        chart.get("audio_filename"),
+                        chart.get("model_id"),
+                        chart.get("timing_mode"),
                         float(chart.get("rating", 0)),
                         int(chart.get("plays", 0)),
                         chart["created_at"],
@@ -124,11 +144,24 @@ class StudioStore:
         stored["id"] = chart_id
         return stored
 
+    def get_chart(self, chart_id: int) -> Optional[Dict[str, Any]]:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT id, title, artist, difficulty, bpm, genre, filename,
+                       audio_filename, model_id, timing_mode, rating, plays, created_at
+                FROM charts WHERE id = ?
+                """,
+                (chart_id,),
+            ).fetchone()
+        return dict(row) if row else None
+
     def list_charts(self, limit: int = 100, offset: int = 0) -> List[Dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT id, title, artist, difficulty, bpm, genre, rating, plays, created_at
+                SELECT id, title, artist, difficulty, bpm, genre, filename,
+                       audio_filename, model_id, timing_mode, rating, plays, created_at
                 FROM charts ORDER BY id DESC LIMIT ? OFFSET ?
                 """,
                 (limit, offset),
@@ -144,7 +177,8 @@ class StudioStore:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT id, title, artist, difficulty, bpm, genre, rating, plays, created_at
+                SELECT id, title, artist, difficulty, bpm, genre, filename,
+                       audio_filename, model_id, timing_mode, rating, plays, created_at
                 FROM charts
                 WHERE rating <= 0
                 ORDER BY id ASC
@@ -152,6 +186,15 @@ class StudioStore:
                 """
             ).fetchone()
         return dict(row) if row else None
+
+    def set_chart_rating(self, chart_id: int, rating: float) -> bool:
+        with _LOCK:
+            with self._connect() as conn:
+                cur = conn.execute(
+                    "UPDATE charts SET rating = ? WHERE id = ?",
+                    (float(rating), chart_id),
+                )
+                return cur.rowcount > 0
 
     def submit_evaluation(
         self,
@@ -296,6 +339,22 @@ class StudioStore:
             task["result"] = json.loads(task.pop("result_json") or "{}")
             tasks.append(task)
         return tasks
+
+    def interrupt_unfinished_tasks(self, *, updated_at: str) -> int:
+        """Mark work that cannot survive a process restart as interrupted."""
+        with _LOCK:
+            with self._connect() as conn:
+                cur = conn.execute(
+                    """
+                    UPDATE tasks
+                    SET status = 'interrupted',
+                        message = 'Interrupted by a previous server shutdown',
+                        updated_at = ?
+                    WHERE status IN ('queued', 'running')
+                    """,
+                    (updated_at,),
+                )
+                return int(cur.rowcount)
 
     def count_tasks(self) -> int:
         with self._connect() as conn:

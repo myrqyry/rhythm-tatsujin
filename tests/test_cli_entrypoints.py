@@ -1,15 +1,47 @@
+from types import SimpleNamespace
+import sys
+
 from taikonation import cli
 
 
-def test_generate_entrypoint(monkeypatch):
-    called = {"ok": False}
+def test_generate_entrypoint(monkeypatch, tmp_path):
+    audio = tmp_path / "song.wav"
+    audio.write_bytes(b"audio")
+    output = tmp_path / "chart.osu"
+    calls = {}
 
-    def _fake_main():
-        called["ok"] = True
+    def fake_generate_from_audio(audio_path, **kwargs):
+        calls["audio"] = audio_path
+        calls["kwargs"] = kwargs
+        return SimpleNamespace(
+            events={"hits": [], "spans": []},
+            bpm=123.0,
+            model_id="test/model",
+            device="cpu",
+            timing_mode="time",
+        )
 
-    monkeypatch.setattr("taikonation.cli.generate_main", _fake_main)
+    def fake_save(events, output_path, **kwargs):
+        calls["output"] = output_path
+        calls["save_kwargs"] = kwargs
+
+    import taikonation.generation.softchart_backend as backend
+    import taikonation.generation.osu_export as exporter
+
+    monkeypatch.setattr(backend, "generate_from_audio", fake_generate_from_audio)
+    monkeypatch.setattr(exporter, "save_timestamped_osu", fake_save)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["taikonation-generate", str(audio), str(output), "--difficulty", "oni"],
+    )
+
     cli.generate()
-    assert called["ok"] is True
+
+    assert calls["audio"] == audio
+    assert calls["output"] == output
+    assert calls["kwargs"]["course"] == "oni"
+    assert calls["save_kwargs"]["bpm"] == 123.0
 
 
 def test_serve_entrypoint(monkeypatch):

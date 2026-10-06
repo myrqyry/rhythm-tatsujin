@@ -10,6 +10,7 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 from web import server_fastapi as web_server
+from web.persistence import StudioStore
 
 
 async def _response_bytes(response):
@@ -19,7 +20,14 @@ async def _response_bytes(response):
     return payload
 
 
-def test_export_dataset_returns_zip():
+def test_export_dataset_returns_zip(tmp_path, monkeypatch):
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    monkeypatch.setattr(web_server, "CHART_OUTPUT_FOLDER", output_dir)
+    monkeypatch.setattr(web_server, "store", StudioStore(output_dir / "studio.sqlite3"))
+    web_server.generated_charts.clear()
+    web_server.human_evaluations.clear()
+
     web_server.store.create_chart({
         'title': 'Sample',
         'artist': 'Artist',
