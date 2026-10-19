@@ -12,6 +12,8 @@ import zipfile
 import asyncio
 import logging
 import tempfile
+import math
+import uuid
 import yaml
 from datetime import datetime, timezone
 from pathlib import Path
@@ -335,19 +337,38 @@ async def api_upload_audio(
     allowed = {'.mp3', '.wav', '.ogg', '.flac', '.m4a', '.aac'}
     if Path(filename).suffix.lower() not in allowed:
         raise HTTPException(status_code=400, detail='Unsupported file type')
+    if not content:
+        raise HTTPException(status_code=400, detail='Uploaded audio is empty')
     if len(content) > 100 * 1024 * 1024:
         raise HTTPException(status_code=413, detail='File too large (max 100MB)')
 
+    # Exclusive creation prevents a repeated filename from silently replacing
+    # audio already referenced by an existing chart or queued job.
     dest = UPLOAD_FOLDER / filename
-    with open(dest, 'wb') as handle:
-        handle.write(content)
+    for _ in range(16):
+        try:
+            with open(dest, 'xb') as handle:
+                handle.write(content)
+            break
+        except FileExistsError:
+            dest = UPLOAD_FOLDER / f'{Path(filename).stem}_{uuid.uuid4().hex[:8]}{Path(filename).suffix}'
+    else:
+        raise HTTPException(status_code=409, detail='Could not allocate a unique upload filename')
 
-    duration, detected_bpm = await asyncio.to_thread(_inspect_audio, dest)
+    try:
+        duration, detected_bpm = await asyncio.to_thread(_inspect_audio, dest)
+        if duration is None or not math.isfinite(duration) or duration <= 0:
+            raise HTTPException(status_code=400, detail='Uploaded audio could not be decoded')
+    except BaseException:
+        # A bad upload must not consume a filename or leave a bogus library asset.
+        dest.unlink(missing_ok=True)
+        raise
+
     title = filename.rsplit('.', 1)[0].replace('_', ' ').replace('-', ' ').title()
-    await add_system_log('success', f'Audio uploaded: {filename}')
+    await add_system_log('success', f'Audio uploaded: {dest.name}')
     return UploadAudioResponse(
         success=True,
-        filename=filename,
+        filename=dest.name,
         title=title,
         duration=duration,
         detected_bpm=detected_bpm,

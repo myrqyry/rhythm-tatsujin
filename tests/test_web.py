@@ -15,6 +15,25 @@ from web.persistence import StudioStore
 from fastapi import UploadFile
 
 
+
+def _valid_audio_bytes() -> bytes:
+    # A real PCM WAV exercises the decoder instead of passing on magic bytes.
+    import math
+    import struct
+    import wave
+    output = io.BytesIO()
+    with wave.open(output, 'wb') as wav:
+        wav.setnchannels(1)
+        wav.setsampwidth(2)
+        wav.setframerate(8000)
+        samples = [
+            int(8000 * math.sin(2 * math.pi * 220 * index / 8000))
+            for index in range(2000)
+        ]
+        wav.writeframes(struct.pack(f'<{len(samples)}h', *samples))
+    return output.getvalue()
+
+
 @pytest.fixture(autouse=True)
 def isolated_web_runtime(tmp_path: Path, monkeypatch):
     upload_dir = tmp_path / "uploads"
@@ -39,7 +58,7 @@ def test_audio_upload():
     web_server.system_logs.clear()
     web_server.generated_charts.clear()
 
-    content = b'RIFF....WAVEfmt '
+    content = _valid_audio_bytes()
     response = asyncio.run(web_server.api_upload_audio(filename='test_song.wav', content=content))
 
     assert response.success is True
@@ -86,7 +105,7 @@ def test_api_tasks_persistence():
 
 
 def test_audio_upload_with_multipart_file():
-    upload = UploadFile(filename='multipart.wav', file=io.BytesIO(b'RIFF....WAVEfmt '))
+    upload = UploadFile(filename='multipart.wav', file=io.BytesIO(_valid_audio_bytes()))
     response = asyncio.run(web_server.api_upload_audio(file=upload))
     assert response.success is True
     assert response.filename == 'multipart.wav'
