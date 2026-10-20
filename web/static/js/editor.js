@@ -25,8 +25,10 @@ class ChartEditor {
     }
 
     resizeCanvas() {
-        this.canvas.width = this.canvas.parentElement.scrollWidth;
+        const lastTime = Math.max(0, ...this.chartData.notes.map(note => Number(note.time) || 0));
+        this.canvas.width = Math.max(this.canvas.parentElement.clientWidth, lastTime * this.timeScale + 200);
         this.canvas.height = this.canvas.parentElement.clientHeight;
+        this.render();
     }
 
     setupEventListeners() {
@@ -37,8 +39,12 @@ class ChartEditor {
         const toolButtons = document.querySelectorAll('.tool-btn');
         toolButtons.forEach(btn => {
             btn.addEventListener('click', () => {
-                toolButtons.forEach(b => b.classList.remove('active'));
+                toolButtons.forEach(b => {
+                    b.classList.remove('active');
+                    b.setAttribute('aria-pressed', 'false');
+                });
                 btn.classList.add('active');
+                btn.setAttribute('aria-pressed', 'true');
                 this.currentTool = btn.dataset.type;
             });
         });
@@ -104,7 +110,7 @@ class ChartEditor {
 
     handleCanvasClick(event) {
         const rect = this.canvas.getBoundingClientRect();
-        const x = event.clientX - rect.left + this.canvas.parentElement.scrollLeft;
+        const x = event.clientX - rect.left;
         const y = event.clientY - rect.top;
         const time = Math.round(x / this.timeScale);
 

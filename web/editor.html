@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Chart Editor - Rhythm Tatsujin</title>
     <link rel="stylesheet" href="/static/css/styles.css">
+    <link rel="stylesheet" href="/static/css/expressive.css">
     <style>
         body {
             display: flex;
@@ -43,26 +44,26 @@
         }
     </style>
 </head>
-<body>
+<body class="chart-editor">
     <div class="editor-header">
         <h1 id="chartTitle">Chart Editor</h1>
-        <div>
+        <div class="editor-actions">
             <button id="saveButton" class="btn btn-primary">Save Chart</button>
             <a href="/" class="btn btn-secondary">Back to Rhythm Tatsujin</a>
         </div>
     </div>
     <div class="editor-container">
-        <div id="timelineContainer" class="editor-timeline">
+        <div id="timelineContainer" class="editor-timeline" tabindex="0" aria-label="Chart timeline; scroll horizontally to inspect the song">
             <canvas id="timelineCanvas" class="editor-canvas"></canvas>
         </div>
         <div class="editor-controls">
             <h2>Controls</h2>
             <p>Click to add/remove notes.</p>
             <div id="note-tools">
-                <button class="tool-btn active" data-type="don">Don</button>
-                <button class="tool-btn" data-type="ka">Ka</button>
-                <button class="tool-btn" data-type="big_don">Big Don</button>
-                <button class="tool-btn" data-type="big_ka">Big Ka</button>
+                <button class="tool-btn active" data-type="don" aria-pressed="true">Don</button>
+                <button class="tool-btn" data-type="ka" aria-pressed="false">Ka</button>
+                <button class="tool-btn" data-type="big_don" aria-pressed="false">Big Don</button>
+                <button class="tool-btn" data-type="big_ka" aria-pressed="false">Big Ka</button>
             </div>
         </div>
     </div>

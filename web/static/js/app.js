@@ -52,6 +52,11 @@ class RhythmTatsujinApp {
   }
 
   setupNavigation() {
+    const menu = document.querySelector('.workspace-menu');
+    const compact = matchMedia('(max-width: 600px)');
+    const updateMenu = () => { if (menu) menu.open = !compact.matches; };
+    compact.addEventListener('change', updateMenu);
+    updateMenu();
     document.querySelectorAll('.nav-item[data-page]').forEach((button) => {
       button.addEventListener('click', () => this.showPage(button.dataset.page));
     });
@@ -62,6 +67,8 @@ class RhythmTatsujinApp {
   }
 
   showPage(page) {
+    const section = document.getElementById(`${page}-page`);
+    if (!section) return;
     document.querySelectorAll('.page-content').forEach((section) => {
       section.classList.toggle('hidden', section.id !== `${page}-page`);
     });
@@ -82,6 +89,14 @@ class RhythmTatsujinApp {
       research: 'Research',
     };
     document.getElementById('pageTitle').textContent = titles[page] || 'Rhythm Tatsujin';
+    document.body.dataset.workspace = page;
+    const title = document.getElementById('pageTitle');
+    title.tabIndex = -1;
+    title.focus({ preventScroll: true });
+    if (matchMedia('(max-width: 600px)').matches) {
+      const menu = document.querySelector('.workspace-menu');
+      if (menu) menu.open = false;
+    }
 
     if (page === 'library') this.loadCharts();
     if (page === 'research') this.loadResearch();
@@ -247,9 +262,14 @@ class RhythmTatsujinApp {
     });
 
     document.querySelectorAll('.difficulty-btn').forEach((button) => {
+      button.setAttribute('aria-pressed', String(button.classList.contains('selected')));
       button.addEventListener('click', () => {
-        document.querySelectorAll('.difficulty-btn').forEach((item) => item.classList.remove('selected'));
+        document.querySelectorAll('.difficulty-btn').forEach((item) => {
+          item.classList.remove('selected');
+          item.setAttribute('aria-pressed', 'false');
+        });
         button.classList.add('selected');
+        button.setAttribute('aria-pressed', 'true');
       });
     });
 
@@ -364,6 +384,7 @@ class RhythmTatsujinApp {
     const bar = document.getElementById('generation-progress');
     const text = document.getElementById('generation-text');
     if (bar) bar.style.width = `${value}%`;
+    bar?.parentElement.setAttribute('aria-valuenow', String(value));
     if (text && message) text.textContent = message;
   }
 
@@ -557,6 +578,17 @@ class RhythmTatsujinApp {
   }
 
   setupEvaluation() {
+    document.querySelectorAll('.rating-slider').forEach((slider) => {
+      const update = () => {
+        const percent = ((Number(slider.value) - Number(slider.min)) /
+          (Number(slider.max) - Number(slider.min))) * 100;
+        slider.style.setProperty('--rating-fill', `${percent}%`);
+        const output = document.querySelector(`output[for="${slider.id}"]`);
+        if (output) output.textContent = `${slider.value} / ${slider.max}`;
+      };
+      slider.addEventListener('input', update);
+      update();
+    });
     document.getElementById('start-evaluation')?.addEventListener('click', () => this.loadEvaluationChart());
     document.getElementById('submit-evaluation')?.addEventListener('click', () => this.submitEvaluation());
     document.getElementById('skip-evaluation')?.addEventListener('click', () => this.skipEvaluation());
@@ -876,6 +908,11 @@ class RhythmTatsujinApp {
 
     const toast = document.createElement('div');
     toast.className = `toast toast-${type}`;
+    toast.setAttribute('role', type === 'error' ? 'alert' : 'status');
+    requestAnimationFrame(() => {
+      toast.style.transform = 'none';
+      toast.style.opacity = '1';
+    });
 
     const content = document.createElement('div');
     content.className = 'toast-content';

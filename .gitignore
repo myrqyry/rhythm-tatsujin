@@ -107,3 +107,7 @@ reference_osz/
 # /output/
 # /input_songs/
 # /input_charts_nr/
+
+# meristem:local-ignore:start
+.meristem/local/
+# meristem:local-ignore:end

@@ -5,8 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Rhythm Tatsujin</title>
     <link rel="stylesheet" href="static/css/styles.css">
+    <link rel="stylesheet" href="static/css/expressive.css">
 </head>
-<body>
+<body class="studio">
+    <a class="skip-link" href="#workspace">Skip to workspace</a>
     <div class="main-container">
         <aside class="sidebar">
             <div class="logo-section">
@@ -20,6 +22,8 @@
                 <div class="tagline">Audio → osu!taiko</div>
             </div>
 
+            <details class="workspace-menu" open>
+            <summary>Workspaces <span aria-hidden="true">⌄</span></summary>
             <nav class="nav-menu" aria-label="Main navigation">
                 <button class="nav-item active" data-page="dashboard" aria-current="page">
                     <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h6v6h-6z"></path></svg>
@@ -46,18 +50,19 @@
                     <span>Research</span>
                 </button>
             </nav>
+            </details>
         </aside>
 
         <div class="content-area">
             <header class="header">
                 <h1 class="page-title" id="pageTitle">Dashboard</h1>
-                <div class="status-indicator">
+                <div class="status-indicator" role="status">
                     <div class="status-dot" id="statusDot"></div>
                     <span id="statusText">Connecting…</span>
                 </div>
             </header>
 
-            <main class="main-content">
+            <main class="main-content" id="workspace" tabindex="-1">
                 <section id="dashboard-page" class="page-content">
                     <div class="metrics-grid">
                         <div class="metric-card">
@@ -126,7 +131,7 @@
                                         </div>
                                         <p class="upload-text">Drop audio here</p>
                                         <p class="upload-subtext">or click to choose a file</p>
-                                        <input type="file" id="audio-input" accept=".mp3,.wav,.ogg,.flac,.m4a,.aac">
+                                        <input type="file" id="audio-input" aria-label="Choose audio to generate a Taiko chart" accept=".mp3,.wav,.ogg,.flac,.m4a,.aac">
                                     </div>
                                     <div class="upload-progress" id="upload-progress" style="display:none;">
                                         <p>Inspecting audio…</p>
@@ -193,7 +198,7 @@
                                     </div>
                                 </div>
                                 <div class="generation-status">
-                                    <div class="progress-bar-animated">
+                                    <div class="progress-bar-animated" role="progressbar" aria-label="Chart generation" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
                                         <div class="progress-fill" id="generation-progress"></div>
                                     </div>
                                 </div>
@@ -215,7 +220,7 @@
 
                             <div class="charts-controls">
                                 <div class="search-box">
-                                    <input type="search" placeholder="Search charts…" id="chart-search">
+                                    <input type="search" placeholder="Search charts…" id="chart-search" aria-label="Search charts">
                                 </div>
                                 <select id="chart-difficulty-filter" class="form-select" aria-label="Filter by difficulty">
                                     <option value="">All difficulties</option>
@@ -280,20 +285,20 @@
                                 <h3 id="evaluationChartTitle">Loading chart…</h3>
 
                                 <div class="form-group">
-                                    <label class="form-label">Fun</label>
-                                    <input type="range" name="fun" class="rating-slider" min="1" max="10" value="5">
+                                    <label class="form-label" for="rating-fun">Fun <output for="rating-fun">5 / 10</output></label>
+                                    <input id="rating-fun" type="range" name="fun" class="rating-slider" min="1" max="10" value="5">
                                 </div>
                                 <div class="form-group">
-                                    <label class="form-label">Musicality</label>
-                                    <input type="range" name="musicality" class="rating-slider" min="1" max="10" value="5">
+                                    <label class="form-label" for="rating-musicality">Musicality <output for="rating-musicality">5 / 10</output></label>
+                                    <input id="rating-musicality" type="range" name="musicality" class="rating-slider" min="1" max="10" value="5">
                                 </div>
                                 <div class="form-group">
-                                    <label class="form-label">Playability</label>
-                                    <input type="range" name="playability" class="rating-slider" min="1" max="10" value="5">
+                                    <label class="form-label" for="rating-playability">Playability <output for="rating-playability">5 / 10</output></label>
+                                    <input id="rating-playability" type="range" name="playability" class="rating-slider" min="1" max="10" value="5">
                                 </div>
                                 <div class="form-group">
-                                    <label class="form-label">Pattern coherence</label>
-                                    <input type="range" name="coherence" class="rating-slider" min="1" max="10" value="5">
+                                    <label class="form-label" for="rating-coherence">Pattern coherence <output for="rating-coherence">5 / 10</output></label>
+                                    <input id="rating-coherence" type="range" name="coherence" class="rating-slider" min="1" max="10" value="5">
                                 </div>
                                 <div class="form-group">
                                     <label class="form-label" for="evaluation-comments">Comments</label>
