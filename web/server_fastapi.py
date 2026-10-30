@@ -970,7 +970,32 @@ async def api_save_chart(request: SaveChartRequest, _auth: bool = Depends(token_
 
             new_hit_objects.append(f"{x},{y},{time},{obj_type},{hit_sound},{extras}\n")
 
-        new_lines = lines[:start_index] + new_hit_objects + lines[end_index:]
+        # Preserve hit-object lines that the circle-only editor does not represent
+        # (sliders/rolls/spinners/etc.) instead of silently discarding them.
+        preserved_hit_objects = []
+        for line in lines[start_index:end_index]:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            parts = stripped.split(',')
+            try:
+                if len(parts) >= 4 and int(parts[3]) & 1:
+                    continue
+            except ValueError:
+                pass
+            preserved_hit_objects.append(line if line.endswith('\n') else line + '\n')
+
+        object_lines = new_hit_objects + preserved_hit_objects
+
+        def _object_time(line: str) -> int:
+            parts = line.strip().split(',')
+            try:
+                return int(parts[2])
+            except (IndexError, ValueError):
+                return 0
+
+        object_lines.sort(key=_object_time)
+        new_lines = lines[:start_index] + object_lines + lines[end_index:]
 
         with open(filepath, 'w', encoding='utf-8') as f:
             f.writelines(new_lines)

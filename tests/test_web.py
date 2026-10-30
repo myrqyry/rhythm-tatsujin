@@ -127,3 +127,32 @@ def test_config_get_and_update(tmp_path: Path, monkeypatch):
     final = asyncio.run(web_server.api_get_config())
     assert final["model"]["d_model"] == 256
     assert final["training"]["batch_size"] == 8
+
+
+def test_save_chart_preserves_existing_sliders_and_spinners(tmp_path: Path):
+    """Saving circle edits must never erase osu! objects the editor can't represent."""
+    filename = "Mixed Objects.osu"
+    chart_file = web_server.CHART_OUTPUT_FOLDER / filename
+    chart_file.write_text(
+        "osu file format v14\n[HitObjects]\n"
+        "256,192,100,1,0,3:3:0:70:\n"
+        "128,192,200,2,0,B|200:192,1,100\n"
+        "256,192,500,8,0,600\n",
+        encoding="utf-8",
+    )
+    chart = web_server.store.create_chart({
+        "title": "Mixed Objects", "artist": "Test", "difficulty": "oni",
+        "bpm": 180, "genre": "test", "filename": filename,
+        "created_at": "2026-10-30T00:00:00",
+    })
+    response = asyncio.run(web_server.api_save_chart(
+        web_server.SaveChartRequest(id=chart["id"], notes=[{"time": 300, "type": "ka"}]),
+        _auth=True,
+    ))
+    assert response["success"] is True
+    saved = chart_file.read_text(encoding="utf-8")
+    section = saved.split("[HitObjects]\n", 1)[1].splitlines()
+    assert [int(line.split(",")[2]) for line in section] == [200, 300, 500]
+    assert "128,192,200,2,0,B|200:192,1,100" in section
+    assert "256,192,500,8,0,600" in section
+    assert "256,192,100,1,0,3:3:0:70:" not in section
